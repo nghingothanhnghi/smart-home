@@ -16,6 +16,7 @@ coordinator, so it stays readable as the project grows.
 """
 
 import time
+import gc
 import machine
 
 import config
@@ -102,6 +103,7 @@ def main_loop(wifi, actuators, device, control, oled):
                 )
 
             time.sleep(0.2)
+            gc.collect()
 
         except Exception as e:
             # Never let an unhandled exception kill the control loop of

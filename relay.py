@@ -50,7 +50,7 @@ class RelayChannel:
         else:
             self._pin = Pin(int(pin_no), Pin.OUT)
 
-        self._on = False
+        self._on = None  # unknown until the first set() below - forces that first write through
         self._speed = 0
         self._on_since = None
         self.set(False)  # start safe: everything OFF at boot
@@ -73,6 +73,15 @@ class RelayChannel:
 
     # ---- public API ----
     def set(self, energize):
+        """
+        Re-commanding the same state is a no-op: it skips the GPIO/PWM
+        write and, critically, doesn't reset _on_since. Without this,
+        a backend that re-sends the same command every poll cycle (as
+        this one does) would keep resetting the safety-sweep timer on
+        every tick and the max-on-time watchdog would never trip.
+        """
+        if energize == self._on:
+            return
         self._write_digital(energize)
         self._on = energize
         self._speed = 100 if energize else 0
@@ -82,6 +91,8 @@ class RelayChannel:
     def set_speed(self, speed_pct):
         """Only meaningful for hardware == 'mosfet'; falls back to on/off."""
         speed_pct = max(0, min(100, speed_pct))
+        if speed_pct == self._speed:
+            return  # same reason as set() above - avoid resetting _on_since for no reason
         if self.hardware == "mosfet":
             self._write_pwm_speed(speed_pct)
         else:
