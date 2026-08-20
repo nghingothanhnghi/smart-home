@@ -52,9 +52,10 @@ class ControlLoop:
             device_id=self.device.device_id, command_id=command_id
         )
         payload = {"success": success, "message": message}
+        headers = auth.build_signed_headers(payload)
         try:
             resp = urequests.post(url, data=ujson.dumps(payload),
-                                   headers=auth.build_headers())
+                                   headers=headers)
             resp.close()
         except Exception as e:
             print("[control] ack_command failed:", e)
@@ -70,9 +71,10 @@ class ControlLoop:
             "timestamp": time.time(),
             "state": self.actuators.state_snapshot(),
         }
+        headers = auth.build_signed_headers(payload)
         try:
             resp = urequests.post(url, data=ujson.dumps(payload),
-                                   headers=auth.build_headers())
+                                   headers=headers)
             resp.close()
         except Exception as e:
             print("[control] push_state failed:", e)
