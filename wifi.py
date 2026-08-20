@@ -23,8 +23,21 @@ RETRY_BACKOFF_S = getattr(config, "WIFI_RETRY_BACKOFF_S", (2, 5, 10, 20, 30))
 class WiFiManager:
     def __init__(self):
         self._wlan = network.WLAN(network.STA_IF)
-        self._wlan.active(True)
+        self._activate()
         self._backoff_index = 0
+
+    def _activate(self):
+        """
+        (Re)bring the STA interface up. A short settle delay after
+        active(True) avoids the classic ESP32 MicroPython
+        'OSError: Wifi Internal State Error' that fires when connect()
+        is called before the radio driver has actually finished
+        initializing.
+        """
+        self._wlan.active(False)
+        time.sleep(0.3)
+        self._wlan.active(True)
+        time.sleep(0.3)
 
     def is_connected(self):
         return self._wlan.isconnected()
@@ -40,7 +53,20 @@ class WiFiManager:
             return True
 
         print("[wifi] connecting to '%s'..." % config.SSID)
-        self._wlan.connect(config.SSID, config.PASSWORD)
+        try:
+            self._wlan.connect(config.SSID, config.PASSWORD)
+        except OSError as e:
+            # Interface got into a wedged internal state (often after a
+            # soft-reset, or a previous connect attempt that didn't
+            # clean up). Cycling active(False)/True clears it - retry
+            # once before giving up on this attempt.
+            print("[wifi] connect() raised %s, resetting interface" % e)
+            self._activate()
+            try:
+                self._wlan.connect(config.SSID, config.PASSWORD)
+            except OSError as e2:
+                print("[wifi] connect() still failing:", e2)
+                return False
 
         start = time.time()
         while not self._wlan.isconnected():

@@ -19,6 +19,7 @@ import config
 import auth
 
 HTTP_TIMEOUT_S = getattr(config, "HTTP_TIMEOUT_S", 8)
+DEVICE_LABEL = getattr(config, "DEVICE_MODEL", "esp32-hydro-controller")
 
 
 class Device:
@@ -47,16 +48,14 @@ class Device:
     def _register_device(self, ip_address):
         payload = {
             "device_id": self.device_id,
+            "name": DEVICE_LABEL + " (" + self.device_id + ")",
             "client_id": config.CLIENT_ID,
             "ip_address": ip_address,
         }
         return self._post(config.DEVICE_URL, payload, "device")
 
     def _register_actuators(self):
-        payload = {
-            "device_id": self.device_id,
-            "actuators": self.actuator_manager.registration_payload(),
-        }
+        payload = self.actuator_manager.registration_payload(device_id=self.device_id)
         return self._post(config.ACTUATOR_BULK_URL, payload, "actuators")
 
     def _post(self, url, payload, label):
@@ -74,12 +73,23 @@ class Device:
 
             ok = 200 <= resp.status_code < 300
             status = resp.status_code
-            resp.close()
 
             if ok:
+                resp.close()
                 print("[device] %s registered OK" % label)
             else:
+                # Surface FastAPI's validation detail (which field(s)
+                # it rejected and why) instead of just the status code -
+                # a 422 alone doesn't say what's wrong with the payload.
+                try:
+                    detail = resp.text
+                except Exception:
+                    detail = "<no body>"
+                resp.close()
                 print("[device] %s registration rejected, status %s" % (label, status))
+                print("[device] backend said:", detail)
+                print("[device] payload sent:", body)
+
             return ok
 
         except Exception as e:

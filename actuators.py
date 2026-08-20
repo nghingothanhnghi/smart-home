@@ -16,6 +16,15 @@ import config
 from relay import RelayManager
 
 
+def _title_case(s):
+    """
+    Manual replacement for str.title() - MicroPython's built-in string
+    type doesn't implement it, so calling .title() raises
+    AttributeError at runtime even though it's fine under CPython.
+    """
+    return " ".join(w[:1].upper() + w[1:] for w in s.split(" ") if w)
+
+
 class ActuatorManager:
     def __init__(self):
         self.relays = RelayManager()
@@ -23,7 +32,14 @@ class ActuatorManager:
     # ---------------------------------------------------------
     # Registration payload (sent to POST /actuators/bulk)
     # ---------------------------------------------------------
-    def registration_payload(self):
+    def registration_payload(self, device_id=None):
+        """
+        Returns a bare list of actuator dicts - the backend's
+        /actuators/bulk endpoint expects the POST body to be a JSON
+        list directly, not an object wrapping it. Pass device_id to
+        stamp it onto every entry (required for registration; omit it
+        for state pushes where it's not needed).
+        """
         actuators = []
         for actuator_type, pin_no in config.TYPE_TO_GPIO.items():
             hardware = config.TYPE_TO_HARDWARE.get(actuator_type, "relay")
@@ -31,14 +47,17 @@ class ActuatorManager:
             if hardware == "mosfet":
                 supported.append("speed")
 
-            actuators.append({
+            entry = {
                 "actuator_id": actuator_type,
                 "type": actuator_type,
                 "gpio": pin_no,
                 "hardware": hardware,
-                "label": actuator_type.replace("_", " ").title(),
+                "label": _title_case(actuator_type.replace("_", " ")),
                 "supported_actions": supported,
-            })
+            }
+            if device_id is not None:
+                entry["device_id"] = device_id
+            actuators.append(entry)
         return actuators
 
     # ---------------------------------------------------------

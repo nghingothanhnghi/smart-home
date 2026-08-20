@@ -11,10 +11,32 @@ whenever a request comes back 401 (DB wipe -> user recreated, or the
 token simply expired).
 """
 
-import ujson
 import urequests
 
 import config
+
+# Characters that don't need percent-encoding in a form body.
+_UNRESERVED = ("ABCDEFGHIJKLMNOPQRSTUVWXYZ"
+               "abcdefghijklmnopqrstuvwxyz"
+               "0123456789-_.~")
+
+
+def _url_escape(s):
+    out = ""
+    for ch in s:
+        if ch in _UNRESERVED:
+            out += ch
+        elif ch == " ":
+            out += "+"
+        else:
+            out += "%%%02X" % ord(ch)
+    return out
+
+
+def _form_encode(fields):
+    return "&".join(
+        _url_escape(k) + "=" + _url_escape(str(v)) for k, v in fields.items()
+    )
 
 
 def login():
@@ -22,17 +44,23 @@ def login():
     Logs in with config.AUTH_USERNAME / config.AUTH_PASSWORD and
     stores the returned access token in config.HEADERS so every
     subsequent request is authenticated. Returns True on success.
+
+    FastAPI's standard /auth/login (OAuth2PasswordRequestForm) expects
+    a form-urlencoded body with 'username'/'password' fields, NOT
+    JSON - sending JSON there gets rejected with a 422 before
+    credentials are even checked, which is what a JSON body would
+    produce here.
     """
-    payload = {
+    body = _form_encode({
         "username": config.AUTH_USERNAME,
         "password": config.AUTH_PASSWORD,
-    }
+    })
 
     try:
         resp = urequests.post(
             config.LOGIN_URL,
-            data=ujson.dumps(payload),
-            headers={"Content-Type": "application/json"},
+            data=body,
+            headers={"Content-Type": "application/x-www-form-urlencoded"},
         )
         status = resp.status_code
         data = resp.json() if status == 200 else None

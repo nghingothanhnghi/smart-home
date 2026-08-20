@@ -70,6 +70,13 @@ class ControlLoop:
 
             data = resp.json()
             resp.close()
+
+            # The backend returns a bare JSON list of commands here
+            # (confirmed from a live 'list' object has no attribute
+            # 'get' failure) - fall back to the {"commands": [...]}
+            # shape too in case a future backend version wraps it.
+            if isinstance(data, list):
+                return data
             return data.get("commands", [])
 
         except Exception as e:
@@ -94,12 +101,17 @@ class ControlLoop:
     # Actuator state push: POST /actuators/bulk
     # ---------------------------------------------------------
     def push_actuator_state(self):
-        payload = {
-            "device_id": self.device.device_id,
-            "actuators": self.actuators.registration_payload(),
-            "states": self.actuators.state_snapshot(),
-            "speeds": self.actuators.speed_snapshot(),
-        }
+        device_id = self.device.device_id
+        states = self.actuators.state_snapshot()
+        speeds = self.actuators.speed_snapshot()
+
+        payload = self.actuators.registration_payload(device_id=device_id)
+        for entry in payload:
+            actuator_type = entry["type"]
+            entry["state"] = 1 if states.get(actuator_type) else 0
+            if actuator_type in speeds:
+                entry["speed"] = speeds[actuator_type]
+
         self._post(config.ACTUATOR_BULK_URL, payload, "actuator state")
 
     def _post(self, url, payload, label):
@@ -113,6 +125,18 @@ class ControlLoop:
                     return
                 resp = urequests.post(url, data=body, headers=auth.build_headers(),
                                        timeout=HTTP_TIMEOUT_S)
+
+            status = resp.status_code
+            if status >= 300:
+                try:
+                    detail = resp.text
+                except Exception:
+                    detail = "<no body>"
+                resp.close()
+                print("[control] push %s rejected, status %s" % (label, status))
+                print("[control] backend said:", detail)
+                return
+
             resp.close()
         except Exception as e:
             print("[control] push %s failed: %s" % (label, e))
