@@ -1,56 +1,95 @@
 """
 relay.py
 --------
-Low-level hardware abstraction for every relay channel driving a 220V
-load (6 lights + 2 door-direction channels). This is the ONLY module
-that touches machine.Pin for actuation, which keeps GPIO handling and
-safety logic in one auditable place.
+Low-level hardware abstraction for every actuator channel. Channels
+are built straight from config.TYPE_TO_GPIO / config.TYPE_TO_HARDWARE
+instead of a hand-maintained light/door list, so adding a new
+actuator type is a config.py-only change.
 
-Safety features:
-- Active-low support (most opto-isolated relay boards energize on LOW).
-- Per-channel max-on-time watchdog: a channel that's been ON longer
-  than allowed is force-switched OFF on the next sweep(), regardless
-  of what the backend or a dropped connection thinks the state is.
-- Door interlock: OPEN and CLOSE channels can never be energized at
-  the same time, enforced at this layer so no upstream bug can ever
-  short the motor windings against each other.
+Two hardware kinds (config.TYPE_TO_HARDWARE):
+  - "relay"  : simple digital active-low channel (pump, fan, light,
+               valve) - on/off only.
+  - "mosfet" : PWM-capable channel (water_pump) - supports a 0-100%
+               speed via config.PUMP_SPEED, in addition to plain
+               on/off (speed 0 == off, any speed > 0 == on).
+
+Every channel starts OFF at boot (RelayChannel.__init__), and
+config.ACTUATOR_STATES / config.PUMP_SPEED are kept in sync with the
+actual GPIO output on every change, so anything reading those dicts
+(oled_display.py, control.py's state push) never lies about what's
+physically energized.
+
+Safety watchdog: config.py doesn't define a max-on-time ceiling for
+this deployment, so a sane default is used unless one is added
+(config.DEFAULT_MAX_ON_TIME_S) - protects against a stuck command or
+dropped connection leaving a pump/valve/light energized indefinitely.
 """
 
 import time
-from machine import Pin
+from machine import Pin, PWM
 
 import config
 
+PWM_FREQ_HZ = 1000
+DEFAULT_MAX_ON_TIME_S = getattr(config, "DEFAULT_MAX_ON_TIME_S", 12 * 60 * 60)  # 12h
+
 
 class RelayChannel:
-    """A single relay output (one light, or one door direction)."""
+    """A single actuator output, driven either as a plain relay or PWM."""
 
-    def __init__(self, name, pin_no, active_low=None, max_on_time_s=None,
-                 kind="light"):
-        self.name = name
-        self.kind = kind  # "light" | "door_open" | "door_close"
-        self.active_low = config.RELAY_ACTIVE_LOW if active_low is None else active_low
-        self.max_on_time_s = (
-            config.DEFAULT_MAX_ON_TIME_S if max_on_time_s is None else max_on_time_s
-        )
+    def __init__(self, actuator_type, pin_no, hardware="relay",
+                 max_on_time_s=None):
+        self.actuator_type = actuator_type
+        self.pin_key = str(pin_no)
+        self.hardware = hardware
+        self.active_low = config.RELAY_ACTIVE_LOW if hasattr(config, "RELAY_ACTIVE_LOW") else True
+        self.max_on_time_s = DEFAULT_MAX_ON_TIME_S if max_on_time_s is None else max_on_time_s
 
-        self._pin = Pin(pin_no, Pin.OUT)
+        if hardware == "mosfet":
+            self._pin = PWM(Pin(int(pin_no)), freq=PWM_FREQ_HZ)
+        else:
+            self._pin = Pin(int(pin_no), Pin.OUT)
+
         self._on = False
+        self._speed = 0
         self._on_since = None
         self.set(False)  # start safe: everything OFF at boot
 
     # ---- low level ----
-    def _write(self, energize):
-        level = 0 if (self.active_low and energize) else (
-            1 if (self.active_low and not energize) else (1 if energize else 0)
-        )
-        self._pin.value(level)
+    def _write_digital(self, energize):
+        if self.hardware == "mosfet":
+            self._pin.duty(0 if not energize else 1023)
+        else:
+            level = 0 if (self.active_low and energize) else (
+                1 if self.active_low else int(energize)
+            )
+            self._pin.value(level)
+
+    def _write_pwm_speed(self, speed_pct):
+        duty = int((speed_pct / 100) * 1023)
+        if self.active_low:
+            duty = 1023 - duty
+        self._pin.duty(duty)
 
     # ---- public API ----
     def set(self, energize):
-        self._write(energize)
+        self._write_digital(energize)
         self._on = energize
+        self._speed = 100 if energize else 0
         self._on_since = time.time() if energize else None
+        self._sync_state()
+
+    def set_speed(self, speed_pct):
+        """Only meaningful for hardware == 'mosfet'; falls back to on/off."""
+        speed_pct = max(0, min(100, speed_pct))
+        if self.hardware == "mosfet":
+            self._write_pwm_speed(speed_pct)
+        else:
+            self._write_digital(speed_pct > 0)
+        self._speed = speed_pct
+        self._on = speed_pct > 0
+        self._on_since = time.time() if self._on else None
+        self._sync_state()
 
     def on(self):
         self.set(True)
@@ -64,6 +103,9 @@ class RelayChannel:
     def is_on(self):
         return self._on
 
+    def speed(self):
+        return self._speed
+
     def seconds_on(self):
         if not self._on or self._on_since is None:
             return 0
@@ -72,71 +114,47 @@ class RelayChannel:
     def exceeded_max_on_time(self):
         return self._on and self.seconds_on() > self.max_on_time_s
 
+    def _sync_state(self):
+        config.ACTUATOR_STATES[self.pin_key] = 1 if self._on else 0
+        if self.pin_key in config.PUMP_SPEED:
+            config.PUMP_SPEED[self.pin_key] = self._speed
+
 
 class RelayManager:
-    """
-    Owns all relay channels, builds them from config, and provides the
-    safety sweep + door interlock used by actuators.py.
-    """
+    """Owns all actuator channels, built from config.TYPE_TO_GPIO."""
 
     def __init__(self):
-        self.channels = {}  # name -> RelayChannel
+        self.channels = {}  # actuator_type -> RelayChannel
 
-        for name, pin_no in config.LIGHT_PINS.items():
-            self.channels[name] = RelayChannel(
-                name=name, pin_no=pin_no, kind="light"
+        for actuator_type, pin_no in config.TYPE_TO_GPIO.items():
+            hardware = config.TYPE_TO_HARDWARE.get(actuator_type, "relay")
+            self.channels[actuator_type] = RelayChannel(
+                actuator_type=actuator_type, pin_no=pin_no, hardware=hardware
             )
 
-        self.channels["door_open"] = RelayChannel(
-            name="door_open",
-            pin_no=config.DOOR_OPEN_PIN,
-            kind="door_open",
-            max_on_time_s=config.DOOR_MAX_RUN_S,
-        )
-        self.channels["door_close"] = RelayChannel(
-            name="door_close",
-            pin_no=config.DOOR_CLOSE_PIN,
-            kind="door_close",
-            max_on_time_s=config.DOOR_MAX_RUN_S,
-        )
+    def get(self, actuator_type):
+        return self.channels.get(actuator_type)
 
-    def get(self, name):
-        return self.channels.get(name)
-
-    # ---- door interlock ----
-    def energize_door(self, direction):
-        """
-        direction: 'open' or 'close'. Guarantees the opposite channel
-        is off first, so the two can never be energized together.
-        """
-        assert direction in ("open", "close")
-        other = "door_close" if direction == "open" else "door_open"
-        target = "door_open" if direction == "open" else "door_close"
-
-        self.channels[other].off()
-        self.channels[target].on()
-
-    def stop_door(self):
-        self.channels["door_open"].off()
-        self.channels["door_close"].off()
+    def all_off(self):
+        for ch in self.channels.values():
+            ch.off()
 
     # ---- safety sweep ----
     def safety_sweep(self):
         """
         Call periodically from the main loop. Force-off any channel
         that has exceeded its allowed on-time. Returns a list of
-        channel names that were force-stopped, for logging/telemetry.
+        actuator types that were force-stopped, for logging/telemetry.
         """
         tripped = []
-        for name, ch in self.channels.items():
+        for actuator_type, ch in self.channels.items():
             if ch.exceeded_max_on_time():
                 ch.off()
-                tripped.append(name)
+                tripped.append(actuator_type)
         return tripped
 
-    def all_off(self):
-        for ch in self.channels.values():
-            ch.off()
-
     def state_snapshot(self):
-        return {name: ch.is_on() for name, ch in self.channels.items()}
+        return {t: ch.is_on() for t, ch in self.channels.items()}
+
+    def speed_snapshot(self):
+        return {t: ch.speed() for t, ch in self.channels.items() if ch.hardware == "mosfet"}

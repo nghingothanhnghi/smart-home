@@ -2,15 +2,19 @@
 sensors.py
 ----------
 Optional sensor readers (DHT11 temp/humidity, analog EC/PPM probe).
+Readings feed control.py's POST /sensor/data push.
 
-Disabled by default for this deployment (6 lights + sliding door has
-no sensors), but kept as part of the standard project skeleton so a
-future revision of this device (e.g. adding room temperature or soil
-EC monitoring) only needs to flip config.ENABLE_SENSORS and wire up
-the pins already reserved in config.py - no restructuring needed.
+The new config.py doesn't define ENABLE_SENSORS / DHT11_PIN /
+EC_PPM_ADC_PIN, so this module falls back to disabled-by-default with
+placeholder pins - add those three names to config.py to wire real
+sensors in without touching this file.
 """
 
 import config
+
+ENABLE_SENSORS = getattr(config, "ENABLE_SENSORS", False)
+DHT11_PIN = getattr(config, "DHT11_PIN", 4)
+EC_PPM_ADC_PIN = getattr(config, "EC_PPM_ADC_PIN", 35)
 
 _dht_sensor = None
 
@@ -20,13 +24,13 @@ def _init_dht():
     if _dht_sensor is None:
         import dht
         from machine import Pin
-        _dht_sensor = dht.DHT11(Pin(config.DHT11_PIN))
+        _dht_sensor = dht.DHT11(Pin(DHT11_PIN))
     return _dht_sensor
 
 
 def read_temp_humidity():
     """Returns (temp_c, humidity_pct) or (None, None) on failure."""
-    if not config.ENABLE_SENSORS:
+    if not ENABLE_SENSORS:
         return None, None
     try:
         d = _init_dht()
@@ -39,11 +43,11 @@ def read_temp_humidity():
 
 def read_ec_ppm():
     """Returns a raw ADC-derived PPM estimate, or None if disabled/failed."""
-    if not config.ENABLE_SENSORS:
+    if not ENABLE_SENSORS:
         return None
     try:
         from machine import ADC, Pin
-        adc = ADC(Pin(config.EC_PPM_ADC_PIN))
+        adc = ADC(Pin(EC_PPM_ADC_PIN))
         adc.atten(ADC.ATTN_11DB)  # full 0-3.3V range
         raw = adc.read()
         # Placeholder linear mapping - calibrate for your actual probe.
@@ -55,8 +59,8 @@ def read_ec_ppm():
 
 
 def read_all():
-    """Convenience aggregate used for telemetry if sensors are enabled."""
-    if not config.ENABLE_SENSORS:
+    """Convenience aggregate used for the /sensor/data push if sensors are enabled."""
+    if not ENABLE_SENSORS:
         return {}
     temp, hum = read_temp_humidity()
     ppm = read_ec_ppm()

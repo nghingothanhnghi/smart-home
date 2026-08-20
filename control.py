@@ -1,13 +1,24 @@
 """
 control.py
 ----------
-The device's "brain loop": periodically polls the FastAPI backend for
-pending commands, executes them via actuators.py, acknowledges each
-one, and periodically pushes full state + a heartbeat back up.
+The device's "brain loop" for the hydro backend:
 
-The backend is the source of truth. Optional local automation
-(ENABLE_LOCAL_AUTOMATION) is only a fallback/enhancement layer and
-must never contradict a command that just came from the backend.
+  - GET  /hydro/status   -> pending commands (config.STATUS_URL).
+                             Polling this also doubles as our
+                             heartbeat, since there's no separate
+                             heartbeat endpoint in this backend.
+  - POST /sensor/data    -> periodic sensor telemetry (config.SENSOR_URL).
+  - POST /actuators/bulk -> periodic actuator-state push (config.ACTUATOR_BULK_URL),
+                             so the dashboard reflects what's physically
+                             energized after every command batch.
+
+Both intervals are driven by config.SEND_INTERVAL. auth.py's login()
+is retried transparently whenever a request comes back 401 (expired
+token, or a DB wipe that removed the backing user).
+
+The backend is the source of truth *unless* config.AUTO_MODE["enabled"]
+is True, in which case backend commands are ignored so local
+automation logic (if any) doesn't get fought over the actuators.
 """
 
 import time
@@ -17,78 +28,94 @@ import urequests
 import config
 import auth
 
+try:
+    import sensors
+except Exception:
+    sensors = None
+
+HTTP_TIMEOUT_S = getattr(config, "HTTP_TIMEOUT_S", 8)
+
 
 class ControlLoop:
     def __init__(self, device, actuator_manager):
         self.device = device
         self.actuators = actuator_manager
 
-        self._last_command_poll = 0
-        self._last_state_push = 0
-        self._last_heartbeat = 0
+        self._last_status_poll = 0
+        self._last_sensor_push = 0
 
     # ---------------------------------------------------------
-    # Commands: GET /devices/{id}/commands
+    # Commands: GET /hydro/status
     # ---------------------------------------------------------
-    def poll_commands(self):
-        url = config.BACKEND_BASE_URL + config.BACKEND_ENDPOINTS["commands"].format(
-            device_id=self.device.device_id
-        )
+    def poll_status(self):
+        if config.AUTO_MODE["enabled"]:
+            # Local automation owns the actuators - don't even ask the
+            # backend for commands that would fight it.
+            return []
+
         try:
-            resp = urequests.get(url, headers=auth.build_headers(),
-                                  timeout=config.HTTP_TIMEOUT_S)
+            resp = urequests.get(config.STATUS_URL, headers=auth.build_headers(),
+                                  timeout=HTTP_TIMEOUT_S)
+
+            if resp.status_code == 401:
+                resp.close()
+                if not auth.login():
+                    return []
+                resp = urequests.get(config.STATUS_URL, headers=auth.build_headers(),
+                                      timeout=HTTP_TIMEOUT_S)
+
             if resp.status_code != 200:
                 resp.close()
                 return []
+
             data = resp.json()
             resp.close()
             return data.get("commands", [])
+
         except Exception as e:
-            print("[control] poll_commands failed:", e)
+            print("[control] poll_status failed:", e)
             return []
 
-    def ack_command(self, command_id, success, message):
-        url = config.BACKEND_BASE_URL + config.BACKEND_ENDPOINTS["ack"].format(
-            device_id=self.device.device_id, command_id=command_id
-        )
-        payload = {"success": success, "message": message}
-        headers = auth.build_signed_headers(payload)
-        try:
-            resp = urequests.post(url, data=ujson.dumps(payload),
-                                   headers=headers)
-            resp.close()
-        except Exception as e:
-            print("[control] ack_command failed:", e)
+    # ---------------------------------------------------------
+    # Sensor data: POST /sensor/data
+    # ---------------------------------------------------------
+    def push_sensor_data(self):
+        if sensors is None:
+            return
+        readings = sensors.read_all()
+        if not readings:
+            return
+
+        payload = {"device_id": self.device.device_id, "timestamp": time.time()}
+        payload.update(readings)
+        self._post(config.SENSOR_URL, payload, "sensor data")
 
     # ---------------------------------------------------------
-    # State: POST /devices/{id}/state
+    # Actuator state push: POST /actuators/bulk
     # ---------------------------------------------------------
-    def push_state(self):
-        url = config.BACKEND_BASE_URL + config.BACKEND_ENDPOINTS["state"].format(
-            device_id=self.device.device_id
-        )
+    def push_actuator_state(self):
         payload = {
-            "timestamp": time.time(),
-            "state": self.actuators.state_snapshot(),
+            "device_id": self.device.device_id,
+            "actuators": self.actuators.registration_payload(),
+            "states": self.actuators.state_snapshot(),
+            "speeds": self.actuators.speed_snapshot(),
         }
-        headers = auth.build_signed_headers(payload)
-        try:
-            resp = urequests.post(url, data=ujson.dumps(payload),
-                                   headers=headers)
-            resp.close()
-        except Exception as e:
-            print("[control] push_state failed:", e)
+        self._post(config.ACTUATOR_BULK_URL, payload, "actuator state")
 
-    def push_heartbeat(self):
-        url = config.BACKEND_BASE_URL + config.BACKEND_ENDPOINTS["heartbeat"].format(
-            device_id=self.device.device_id
-        )
+    def _post(self, url, payload, label):
+        body = ujson.dumps(payload)
         try:
-            resp = urequests.post(url, data=ujson.dumps({"timestamp": time.time()}),
-                                   headers=auth.build_headers())
+            resp = urequests.post(url, data=body, headers=auth.build_headers(),
+                                   timeout=HTTP_TIMEOUT_S)
+            if resp.status_code == 401:
+                resp.close()
+                if not auth.login():
+                    return
+                resp = urequests.post(url, data=body, headers=auth.build_headers(),
+                                       timeout=HTTP_TIMEOUT_S)
             resp.close()
         except Exception as e:
-            print("[control] push_heartbeat failed:", e)
+            print("[control] push %s failed: %s" % (label, e))
 
     # ---------------------------------------------------------
     # Main tick, call this frequently from main.py's loop
@@ -96,17 +123,19 @@ class ControlLoop:
     def tick(self):
         now = time.time()
 
-        if now - self._last_command_poll >= config.COMMAND_POLL_INTERVAL_S:
-            self._last_command_poll = now
-            for command in self.poll_commands():
+        if now - self._last_status_poll >= config.SEND_INTERVAL:
+            self._last_status_poll = now
+
+            commands = self.poll_status()
+            for command in commands:
                 success, message = self.actuators.execute(command)
                 print("[control] executed", command, "->", success, message)
-                self.ack_command(command.get("command_id"), success, message)
 
-        if now - self._last_state_push >= config.STATE_PUSH_INTERVAL_S:
-            self._last_state_push = now
-            self.push_state()
+            # Reflect current actuator state back to the backend on
+            # every poll (not just when a command ran), so the
+            # dashboard never goes stale.
+            self.push_actuator_state()
 
-        if now - self._last_heartbeat >= config.HEARTBEAT_INTERVAL_S:
-            self._last_heartbeat = now
-            self.push_heartbeat()
+        if now - self._last_sensor_push >= config.SEND_INTERVAL:
+            self._last_sensor_push = now
+            self.push_sensor_data()

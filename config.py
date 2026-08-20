@@ -1,124 +1,135 @@
-"""
-config.py
----------
-Single source of truth for hardware pin mapping, backend endpoints,
-timing constants and feature flags. No secrets live here directly -
-they are imported from secrets.py so this file CAN be committed to
-version control safely.
+# config.py
+# ================================
+# 🔐 DEVICE ID (unique per ESP32)
+# ================================
+from device_id import get_device_code
+from secrets import AUTH_USERNAME, AUTH_PASSWORD
 
-Editing this file is how you "scale" the project: add a light, change
-a pin, point at a new backend, all without touching logic files.
-"""
+DEVICE_CODE = get_device_code()
+# 👉 This is sent to backend as `device_id`
+# 👉 Backend stores it in HydroDevice.device_id (STRING, unique)
 
-import secrets
+# ================================
+# 📶 WIFI CONFIG
+# ================================
+SSID = "Oanh Nguyen 2.4Ghz"
+PASSWORD = "71237123"
 
-# =========================================================
-# DEVICE IDENTITY
-# =========================================================
-DEVICE_MODEL = "esp32-relay-controller"
-FIRMWARE_VERSION = "1.0.0"
+# ================================
+# 🌐 BACKEND BASE URL
+# ================================
+FASTAPI_URL = "http://192.168.1.66:8000"
 
-# =========================================================
-# WIFI
-# =========================================================
-WIFI_SSID = secrets.WIFI_SSID
-WIFI_PASSWORD = secrets.WIFI_PASSWORD
-WIFI_CONNECT_TIMEOUT_S = 15
-WIFI_RETRY_BACKOFF_S = (2, 5, 10, 20, 30)  # escalating backoff, then repeats last value
-
-# =========================================================
-# BACKEND (FastAPI)
-# =========================================================
-BACKEND_BASE_URL = "http://192.168.1.66:8000"
-
-BACKEND_ENDPOINTS = {
-    "register": "/devices/register",
-    "commands": "/devices/{device_id}/commands",
-    "ack": "/devices/{device_id}/commands/{command_id}/ack",
-    "state": "/devices/{device_id}/state",
-    "heartbeat": "/devices/{device_id}/heartbeat",
-}
-
-DEVICE_AUTH_TOKEN = secrets.DEVICE_AUTH_TOKEN
-DEVICE_HMAC_SECRET = secrets.DEVICE_HMAC_SECRET
-
-HTTP_TIMEOUT_S = 8
-COMMAND_POLL_INTERVAL_S = 3
-STATE_PUSH_INTERVAL_S = 15
-HEARTBEAT_INTERVAL_S = 30
-
-# =========================================================
-# GPIO PIN MAP
-# =========================================================
-# NOTE on ESP32 WROOM pin choice:
-# - Avoided GPIO 34-39 (input-only, cannot drive relays).
-# - Avoided GPIO 0, 2, 12, 15 (strapping pins - can break boot if
-#   pulled the wrong way by an externally-connected relay module).
-# - Avoided GPIO 6-11 (connected to internal flash, unusable).
-# - I2C bus uses the common default SDA=21 / SCL=22 for the OLED.
+# ================================
+# 👤 AUTH / USER CONTEXT
+# ================================
+# ⚠️ CHANGED: no more static AUTH_TOKEN baked into firmware.
+# A static JWT breaks in two independent ways:
+#   1. DB wipe        -> the user it references no longer exists -> 401 forever
+#   2. Natural expiry  -> ACCESS_TOKEN_EXPIRE_MINUTES defaults to 30 days
+#      on the backend -> token dies even with a healthy DB
 #
-# Relay modules are almost always ACTIVE LOW (a LOW signal energizes
-# the relay coil through the optocoupler). RELAY_ACTIVE_LOW below
-# controls this globally; override per-channel if you mix modules.
-RELAY_ACTIVE_LOW = True
+# Storing username/password instead and logging in at boot means BOTH
+# problems go away: a DB wipe only requires recreating the same
+# username/password (no reflash), and expiry is irrelevant since a fresh
+# token is minted every boot.
+#
+# In a real deployment, move these two lines into a separate, untracked
+# secrets.py (gitignored) rather than committing credentials in config.py.
+AUTH_USERNAME = AUTH_USERNAME
+AUTH_PASSWORD = AUTH_PASSWORD
 
-# 6 lights, each on its own 220V-rated relay channel.
-LIGHT_PINS = {
-    "light_1": 13,
-    "light_2": 14,
-    "light_3": 27,
-    "light_4": 26,
-    "light_5": 25,
-    "light_6": 33,
+CLIENT_ID = "706cfcdc-5e1c-4bae-b159-f66425c81ecc"  # informational only — backend ignores this on writes
+USER_ID = 1                                          # informational only — backend ignores this on writes
+
+# HEADERS starts with no Authorization — auth.login() fills it in at boot
+# (see auth.py) and can refresh it again later if a request comes back 401.
+HEADERS = {
+    "Content-Type": "application/json"
 }
 
-# Sliding door: two relay channels drive a motor contactor/relay in
-# opposite directions (OPEN / CLOSE). They are hardware-interlocked
-# in software (relay.py) so both can never be energized together.
-DOOR_OPEN_PIN = 32
-DOOR_CLOSE_PIN = 23
+# ================================
+# 🔗 API ROUTES (MATCH BACKEND)
+# ================================
 
-# "PULSE" -> relay energizes for DOOR_PULSE_S seconds then switches off
-#            (typical for sliding door controllers that self-latch on
-#            a momentary trigger, e.g. most commercial slide operators).
-# "HOLD"  -> relay stays energized until explicitly stopped or until
-#            DOOR_MAX_RUN_S safety timeout is hit (use if your motor
-#            needs continuous power while travelling, with end-limit
-#            switches doing the actual stopping).
-DOOR_MODE = "PULSE"
-DOOR_PULSE_S = 1.0
-DOOR_MAX_RUN_S = 15  # safety cutoff regardless of mode
+# Auth
+LOGIN_URL = FASTAPI_URL + "/auth/login"
 
-I2C_SDA_PIN = 21
-I2C_SCL_PIN = 22
-OLED_WIDTH = 128
-OLED_HEIGHT = 64
-OLED_I2C_ADDR = 0x3C
+# Device (ESP32 registration)
+DEVICE_URL = FASTAPI_URL + "/hydro/devices"
+# ↔ POST → create device
+# ↔ GET  → list devices
 
-# =========================================================
-# SAFETY
-# =========================================================
-# Hard ceiling: any relay (light or door) that has been ON longer than
-# this is force-switched OFF by relay.py's watchdog sweep. Prevents a
-# stuck/duplicated command or dropped connection from leaving a 220V
-# load energized indefinitely. Lights use a long ceiling; doors use
-# DOOR_MAX_RUN_S instead (see relay.py).
-DEFAULT_MAX_ON_TIME_S = 12 * 60 * 60  # 12 hours
+# Sensor data
+SENSOR_URL = FASTAPI_URL + "/sensor/data"
+# ↔ POST → send sensor data
 
-# =========================================================
-# OPTIONAL SENSORS (kept for future scaling; disabled by default
-# since this deployment is lights + door only)
-# =========================================================
-ENABLE_SENSORS = False
-DHT11_PIN = 4
-EC_PPM_ADC_PIN = 35  # input-only pin is fine here, it's analog-only
+# Actuators
+ACTUATOR_URL = FASTAPI_URL + "/actuators"
+ACTUATOR_BULK_URL = ACTUATOR_URL + "/bulk"
+# ↔ POST bulk → register actuators
 
-# =========================================================
-# LOCAL AUTOMATION (optional; backend remains source of truth)
-# =========================================================
-ENABLE_LOCAL_AUTOMATION = False
+# System status (IMPORTANT)
+STATUS_URL = FASTAPI_URL + "/hydro/status"
+# ↔ GET → ESP32 fetch commands from backend
 
-# =========================================================
-# MISC
-# =========================================================
-STATUS_LED_PIN = 2  # onboard LED on most WROOM dev boards
+# ================================
+# 🤖 AUTO MODE FLAG
+# ================================
+AUTO_MODE = {"enabled": False}   # mutable dictionary
+# 👉 If True → ESP32 uses local logic (auto_control)
+# 👉 If False → controlled by backend
+
+# ================================
+# ⚡ GPIO MAPPING (CRITICAL)
+# ================================
+# Map actuator type → GPIO PIN (STRING)
+
+TYPE_TO_GPIO = {
+    "pump": "25",
+    "fan": "23",
+    "light": "27",
+    "water_pump": "16",
+    "valve": "18",
+}
+
+TYPE_TO_HARDWARE = {
+    "pump": "relay",
+    "fan": "relay",
+    "light": "relay",
+    "water_pump": "mosfet",   # 👈 THIS is enough
+    "valve": "relay",
+}
+
+# 0–100 (%)
+PUMP_SPEED = {
+    "16": 0
+}
+
+# ================================
+# 🔌 RUNTIME STATE STORAGE
+# ================================
+# This is what actually drives relays
+
+ACTUATOR_STATES = {
+    "25": 0,
+    "23": 0,
+    "27": 0,
+    "16": 0,
+    "18": 0,
+}
+
+# Backend logic:
+# 1 = actuator ON
+# 0 = actuator OFF
+
+# Relay hardware is ACTIVE LOW:
+# GPIO LOW  -> relay ON
+# GPIO HIGH -> relay OFF
+
+
+# ================================
+# ⏱ TIMING CONFIG
+# ================================
+SEND_INTERVAL = 10  # seconds (send sensor data)
+RETRY_DELAY = 5     # seconds (retry when failed)

@@ -5,12 +5,19 @@ Owns the WLAN station interface: connecting, reporting status, and
 reconnecting with escalating backoff if the link drops. Every other
 module treats WiFi as "up or down" through this class rather than
 touching the `network` module directly.
+
+Reads config.SSID / config.PASSWORD (the new config.py names).
+WIFI_CONNECT_TIMEOUT_S / WIFI_RETRY_BACKOFF_S aren't defined in the
+new config.py, so sane defaults are used unless you add them there.
 """
 
 import network
 import time
 
 import config
+
+CONNECT_TIMEOUT_S = getattr(config, "WIFI_CONNECT_TIMEOUT_S", 15)
+RETRY_BACKOFF_S = getattr(config, "WIFI_RETRY_BACKOFF_S", (2, 5, 10, 20, 30))
 
 
 class WiFiManager:
@@ -28,16 +35,16 @@ class WiFiManager:
         return None
 
     def connect(self):
-        """Blocking connect attempt, bounded by WIFI_CONNECT_TIMEOUT_S."""
+        """Blocking connect attempt, bounded by CONNECT_TIMEOUT_S."""
         if self.is_connected():
             return True
 
-        print("[wifi] connecting to '%s'..." % config.WIFI_SSID)
-        self._wlan.connect(config.WIFI_SSID, config.WIFI_PASSWORD)
+        print("[wifi] connecting to '%s'..." % config.SSID)
+        self._wlan.connect(config.SSID, config.PASSWORD)
 
         start = time.time()
         while not self._wlan.isconnected():
-            if time.time() - start > config.WIFI_CONNECT_TIMEOUT_S:
+            if time.time() - start > CONNECT_TIMEOUT_S:
                 print("[wifi] connect timed out")
                 return False
             time.sleep(0.5)
@@ -64,7 +71,7 @@ class WiFiManager:
         return ok
 
     def _next_backoff(self):
-        table = config.WIFI_RETRY_BACKOFF_S
+        table = RETRY_BACKOFF_S
         delay = table[min(self._backoff_index, len(table) - 1)]
         self._backoff_index += 1
         return delay
