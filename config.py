@@ -29,7 +29,7 @@ WIFI_RETRY_BACKOFF_S = (2, 5, 10, 20, 30)  # escalating backoff, then repeats la
 # =========================================================
 # BACKEND (FastAPI)
 # =========================================================
-BACKEND_BASE_URL = "https://your-fastapi-backend.example.com/api/v1"
+BACKEND_BASE_URL = "http://192.168.1.66:8000"
 
 BACKEND_ENDPOINTS = {
     "register": "/devices/register",
