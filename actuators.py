@@ -52,9 +52,20 @@ class ActuatorManager:
         actuators = []
         for actuator_type, pin_no in config.TYPE_TO_GPIO.items():
             hardware = config.TYPE_TO_HARDWARE.get(actuator_type, "relay")
-            supported = ["on", "off", "toggle"]
-            if hardware == "mosfet":
-                supported.append("speed")
+                
+            if hardware == "door":
+                # Backend's `port` column is a plain int - can't hold "32,23".
+                # Use the OPEN pin as the canonical port/pin for DB/display
+                # purposes; both real pins live in config.DOOR_OPEN_PIN /
+                # config.DOOR_CLOSE_PIN and are what relay.py actually uses.
+                pin_field = config.DOOR_OPEN_PIN
+                supported = ["on", "off", "stop"]
+            elif hardware == "mosfet":
+                pin_field = int(pin_no)
+                supported = ["on", "off", "toggle", "speed"]
+            else:
+                pin_field = int(pin_no)
+                supported = ["on", "off", "toggle"]                
 
             label = _title_case(actuator_type.replace("_", " "))
             entry = {
@@ -62,8 +73,9 @@ class ActuatorManager:
                 "type": actuator_type,
                 "name": label,
                 "label": label,
-                "gpio": pin_no,
-                "port": pin_no,
+                "gpio": str(pin_field),
+                "pin": str(pin_field),
+                "port": pin_field,
                 "hardware": hardware,
                 "supported_actions": supported,
             }
@@ -109,6 +121,10 @@ class ActuatorManager:
                 channel.off()
             elif action == "toggle":
                 channel.toggle()
+            elif action == "stop":
+                if not hasattr(channel, "stop"):
+                    return False, "'%s' does not support stop" % actuator_id
+                channel.stop()
             elif action == "speed":
                 if channel.hardware != "mosfet":
                     return False, "'%s' does not support speed" % actuator_id
@@ -116,19 +132,23 @@ class ActuatorManager:
             else:
                 return False, "unsupported action '%s' for %s" % (action, actuator_id)
 
+            if action == "stop":
+                return True, "%s -> stop" % actuator_id
+
             changed = channel.is_on() != before_on or channel.speed() != before_speed
             if not changed:
                 return True, None
 
             if channel.hardware == "mosfet":
                 result = "%d%%" % channel.speed()
+            elif channel.hardware == "door":
+                result = "up" if channel.is_on() else "down"
             else:
                 result = "on" if channel.is_on() else "off"
             return True, "%s -> %s" % (actuator_id, result)
 
         except Exception as e:
             return False, "error executing command: %s" % str(e)
-
     # ---------------------------------------------------------
     # Maintenance loop hooks (call from main.py's loop)
     # ---------------------------------------------------------

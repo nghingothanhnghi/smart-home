@@ -13,7 +13,7 @@ DEVICE_CODE = get_device_code()
 # 📶 WIFI CONFIG
 # ================================
 SSID = "Oanh Nguyen 2.4Ghz"
-PASSWORD = "71237123"
+PASSWORD = "24322432"
 
 # ================================
 # 🌐 BACKEND BASE URL
@@ -86,20 +86,35 @@ AUTO_MODE = {"enabled": False}   # mutable dictionary
 # Map actuator type → GPIO PIN (STRING)
 
 TYPE_TO_GPIO = {
-    "pump": "25",
-    "fan": "23",
-    "light": "27",
-    "water_pump": "16",
-    "valve": "18",
+    "light_1": "13",
+    "light_2": "14",
+    "light_3": "27",
+    "light_4": "26",
+    "light_5": "25",
+    "light_6": "33",
+    "light_7": "4",     # ASSUMPTION: free GPIO, not in README's table - confirm wiring
+    "sliding_door": "32,23",  # informational only for registration payload; see DOOR_* below
 }
 
 TYPE_TO_HARDWARE = {
-    "pump": "relay",
-    "fan": "relay",
-    "light": "relay",
-    "water_pump": "mosfet",   # 👈 THIS is enough
-    "valve": "relay",
+    "light_1": "relay",
+    "light_2": "relay",
+    "light_3": "relay",
+    "light_4": "relay",
+    "light_5": "relay",
+    "light_6": "relay",
+    "light_7": "relay",
+    "sliding_door": "door",   # tells RelayManager to build a DoorChannel, not a RelayChannel
 }
+
+# ================================
+# 🚪 SLIDING DOOR (interlocked pair)
+# ================================
+DOOR_OPEN_PIN = 32
+DOOR_CLOSE_PIN = 23
+DOOR_MODE = "PULSE"        # "PULSE" (momentary trigger) or "HOLD" (energized while travelling)
+DOOR_PULSE_S = 2           # PULSE mode: how long to energize the OPEN/CLOSE relay
+DOOR_MAX_RUN_S = 20        # HOLD mode: safety ceiling before force-stop
 
 # 0–100 (%)
 PUMP_SPEED = {
@@ -109,23 +124,15 @@ PUMP_SPEED = {
 # ================================
 # 🔌 RUNTIME STATE STORAGE
 # ================================
-# This is what actually drives relays
-
 ACTUATOR_STATES = {
-    "25": 0,
-    "23": 0,
-    "27": 0,
-    "16": 0,
-    "18": 0,
+    "13": 0, "14": 0, "27": 0, "26": 0, "25": 0, "33": 0, "4": 0,
+    "door": 0,   # 1 = logically open, 0 = logically closed
 }
-
-# Backend logic:
-# 1 = actuator ON
-# 0 = actuator OFF
 
 # Relay hardware is ACTIVE LOW:
 # GPIO LOW  -> relay ON
 # GPIO HIGH -> relay OFF
+RELAY_ACTIVE_LOW = True
 
 
 # ================================

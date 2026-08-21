@@ -131,6 +131,83 @@ class RelayChannel:
             config.PUMP_SPEED[self.pin_key] = self._speed
 
 
+class DoorChannel:
+    """
+    Interlocked OPEN/CLOSE pair for a sliding door, exposed through
+    the same on()/off()/toggle()/is_on() interface as RelayChannel so
+    actuators.py and control.py don't need to know the difference.
+    on() = open, off() = close.
+    """
+
+    def __init__(self, open_pin, close_pin, mode="PULSE",
+                 pulse_s=2, max_run_s=20):
+        self.actuator_type = "sliding_door"
+        self.hardware = "door"
+        self.mode = mode
+        self.pulse_s = pulse_s
+        self.max_run_s = max_run_s
+        self.active_low = config.RELAY_ACTIVE_LOW if hasattr(config, "RELAY_ACTIVE_LOW") else True
+
+        self._open_pin = Pin(int(open_pin), Pin.OUT)
+        self._close_pin = Pin(int(close_pin), Pin.OUT)
+        self._write(self._open_pin, False)
+        self._write(self._close_pin, False)
+
+        self._on = False            # False = closed, True = open (last commanded)
+        self._running_since = None  # HOLD mode only
+        self.set(False)             # start safe: closed, both pins de-energized
+
+    def _write(self, pin, energize):
+        level = 0 if (self.active_low and energize) else (1 if self.active_low else int(energize))
+        pin.value(level)
+
+    def set(self, want_open):
+        if want_open == self._on and self._running_since is None:
+            return  # no-op, same as RelayChannel.set()
+
+        target, other = (self._open_pin, self._close_pin) if want_open else (self._close_pin, self._open_pin)
+        self._write(other, False)   # interlock: always drop the opposite side first
+        self._write(target, True)
+
+        if self.mode == "PULSE":
+            time.sleep(self.pulse_s)
+            self._write(target, False)  # auto-release
+            self._running_since = None
+        else:  # HOLD
+            self._running_since = time.time()
+
+        self._on = want_open
+        config.ACTUATOR_STATES["door"] = 1 if self._on else 0
+
+    def stop(self):
+        """HOLD-mode safety release - drops both pins without asserting a position."""
+        self._write(self._open_pin, False)
+        self._write(self._close_pin, False)
+        self._running_since = None
+
+    def on(self):
+        self.set(True)
+
+    def off(self):
+        self.set(False)
+
+    def toggle(self):
+        self.set(not self._on)
+
+    def is_on(self):
+        return self._on
+
+    def speed(self):
+        return 100 if self._on else 0
+
+    def seconds_on(self):
+        if self.mode == "HOLD" and self._running_since is not None:
+            return time.time() - self._running_since
+        return 0
+
+    def exceeded_max_on_time(self):
+        return self.mode == "HOLD" and self._running_since is not None and self.seconds_on() > self.max_run_s
+
 class RelayManager:
     """Owns all actuator channels, built from config.TYPE_TO_GPIO."""
 
@@ -139,9 +216,19 @@ class RelayManager:
 
         for actuator_type, pin_no in config.TYPE_TO_GPIO.items():
             hardware = config.TYPE_TO_HARDWARE.get(actuator_type, "relay")
-            self.channels[actuator_type] = RelayChannel(
-                actuator_type=actuator_type, pin_no=pin_no, hardware=hardware
-            )
+
+            if hardware == "door":
+                self.channels[actuator_type] = DoorChannel(
+                    open_pin=config.DOOR_OPEN_PIN,
+                    close_pin=config.DOOR_CLOSE_PIN,
+                    mode=getattr(config, "DOOR_MODE", "PULSE"),
+                    pulse_s=getattr(config, "DOOR_PULSE_S", 2),
+                    max_run_s=getattr(config, "DOOR_MAX_RUN_S", 20),
+                )
+            else:
+                self.channels[actuator_type] = RelayChannel(
+                    actuator_type=actuator_type, pin_no=pin_no, hardware=hardware
+                )
 
     def get(self, actuator_type):
         return self.channels.get(actuator_type)
@@ -160,7 +247,10 @@ class RelayManager:
         tripped = []
         for actuator_type, ch in self.channels.items():
             if ch.exceeded_max_on_time():
-                ch.off()
+                if hasattr(ch, "stop"):
+                    ch.stop()   # door: release both pins, don't assert a closed position
+                else:
+                    ch.off()
                 tripped.append(actuator_type)
         return tripped
 

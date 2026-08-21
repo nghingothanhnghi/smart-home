@@ -155,6 +155,7 @@ class ControlLoop:
         which is now done.
         """
         desired = {}
+        stops = set()
         for item in raw_actuators:
             if not isinstance(item, dict):
                 continue
@@ -162,6 +163,10 @@ class ControlLoop:
             actuator_type = item.get("type")
             if actuator_type is None:
                 continue
+            
+            if item.get("pending_command") == "stop":
+                stops.add(actuator_type)
+                continue  # stop overrides on/off for this cycle - don't also queue on/off            
 
             manual_state = item.get("manual_state")
             state = manual_state if manual_state is not None else item.get("current_state")
@@ -170,10 +175,12 @@ class ControlLoop:
 
             desired[actuator_type] = bool(state)
 
-        return [
+        commands = [
             {"actuator_id": actuator_type, "action": "on" if on else "off"}
             for actuator_type, on in desired.items()
-        ]
+        ]  
+        commands += [{"actuator_id": t, "action": "stop"} for t in stops]
+        return commands
 
     # ---------------------------------------------------------
     # Sensor data: POST /sensor/data
