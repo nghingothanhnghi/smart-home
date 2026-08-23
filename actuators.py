@@ -153,7 +153,12 @@ class ActuatorManager:
     # Maintenance loop hooks (call from main.py's loop)
     # ---------------------------------------------------------
     def tick(self):
-        """Runs the relay safety sweep (force-off on stuck/long-running channels)."""
+        """
+        Runs the relay safety sweep (force-off on stuck/long-running
+        channels) and services any in-flight non-blocking door pulses
+        (PULSE-mode auto-release - see relay.py's service_pulses()).
+        """
+        self.relays.service_pulses()
         tripped = self.relays.safety_sweep()
         if tripped:
             print("[actuators] safety sweep force-stopped:", tripped)

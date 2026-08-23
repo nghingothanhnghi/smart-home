@@ -14,7 +14,12 @@ the FastAPI "hydro" backend:
      foreign key is an integer PK, NOT our string device_id/device
      code - confirmed from the 'device_id: 1' seen in /hydro/status
      and the int_parsing validation errors when the string was sent).
-
+  4. If config.DEVICE_LOCATION is set, sync it to the backend once per
+     boot via PUT /hydro/devices/{numeric_id} - the POST create path
+     (step 2) only sets location on a device's FIRST-EVER registration,
+     so for a device that already exists (the common case after boot
+     #1), location has to be pushed through the update route instead.     
+     
 Run once at boot (and retried from main.py if WiFi drops and
 recovers), so the backend always has an up-to-date picture of the
 device and what it can do.
@@ -37,6 +42,7 @@ class Device:
         self.actuator_manager = actuator_manager
         self.registered = False
         self._actuators_registered = False    # only bulk-register actuators ONCE per boot
+        self._location_synced = False         # only PUT location ONCE per boot
 
     def register(self, ip_address):
         if not auth.is_authenticated():
@@ -52,6 +58,12 @@ class Device:
             print("[device] could not resolve a numeric device id, aborting")
             self.registered = False
             return False
+        
+        # Keep location in sync even on an already-registered device -
+        # see module docstring: POST only sets it on first-ever create,
+        # so an existing device needs the PUT/update path instead.
+        if not self._location_synced:
+            self._sync_location()        
 
         if self._actuators_registered:
             # WiFi reconnect calls register() again to refresh the
@@ -79,6 +91,16 @@ class Device:
             "client_id": config.CLIENT_ID,
             "ip_address": ip_address,
         }
+        
+        # Only include location on the create payload if this board
+        # actually has one configured - omitting the key (rather than
+        # sending null) avoids ever clobbering a location that might
+        # already be set some other way (e.g. dashboard) for a device
+        # this firmware doesn't know has one.
+        location = getattr(config, "DEVICE_LOCATION", None)
+        if location:
+            payload["location"] = location        
+        
         body = ujson.dumps(payload)
 
         try:
@@ -98,7 +120,12 @@ class Device:
                 data = resp.json()
                 resp.close()
                 self.numeric_id = data.get("id")
-                print("[device] device registered OK, numeric id =", self.numeric_id)
+                print("[device] device registered OK, numeric id =", self.numeric_id)  
+                # location (if any) was included in this create payload,
+                # so it's already set on the backend - no need for a PUT.
+                if location:
+                    self._location_synced = True                
+                
                 return True
 
             try:
@@ -152,6 +179,60 @@ class Device:
         except Exception as e:
             print("[device] device lookup failed: %s" % e)
             return False
+        
+    # ---------------------------------------------------------
+    # Location: PUT /hydro/devices/{numeric_id}
+    # ---------------------------------------------------------
+    def _sync_location(self):
+        """
+        Pushes config.DEVICE_LOCATION to the backend via the update
+        route. Only runs if a location is actually configured for this
+        board, and only once per boot (self._location_synced) - it's
+        idempotent server-side, but there's no reason to PUT it on
+        every WiFi-reconnect re-registration.
+        """
+        location = getattr(config, "DEVICE_LOCATION", None)
+        if not location:
+            self._location_synced = True  # nothing to do, don't keep retrying every register() call
+            return True
+ 
+        url = config.DEVICE_URL + "/" + str(self.numeric_id)
+        body = ujson.dumps({"location": location})
+ 
+        try:
+            resp = urequests.put(url, data=body, headers=auth.build_headers(),
+                                  timeout=HTTP_TIMEOUT_S)
+ 
+            if resp.status_code == 401:
+                resp.close()
+                if not auth.login():
+                    return False
+                resp = urequests.put(url, data=body, headers=auth.build_headers(),
+                                      timeout=HTTP_TIMEOUT_S)
+ 
+            status = resp.status_code
+ 
+            if 200 <= status < 300:
+                resp.close()
+                print("[device] location synced ->", location)
+                self._location_synced = True
+                return True
+ 
+            try:
+                detail = resp.text
+            except Exception:
+                detail = "<no body>"
+            resp.close()
+            print("[device] location sync rejected, status %s" % status)
+            print("[device] backend said:", detail)
+            # Don't set _location_synced - retry on the next register()
+            # call (e.g. next WiFi reconnect) rather than giving up
+            # for the rest of this boot.
+            return False
+ 
+        except Exception as e:
+            print("[device] location sync failed: %s" % e)
+            return False        
 
     # ---------------------------------------------------------
     # Actuators: GET /actuators/device/{id} then POST /actuators/bulk
@@ -206,7 +287,7 @@ class Device:
         except Exception as e:
             print("[device] existing-actuator lookup failed: %s" % e)
             return None
-
+             
     def _post(self, url, payload, label):
         body = ujson.dumps(payload)
         try:

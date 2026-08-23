@@ -155,6 +155,7 @@ class DoorChannel:
 
         self._on = False            # False = closed, True = open (last commanded)
         self._running_since = None  # HOLD mode only
+        self._pulse_release_at = None # PULSE mode only: monotonic deadline to auto-release        
         self.set(False)             # start safe: closed, both pins de-energized
 
     def _write(self, pin, energize):
@@ -162,20 +163,28 @@ class DoorChannel:
         pin.value(level)
 
     def set(self, want_open):
-        if want_open == self._on and self._running_since is None:
+        if (want_open == self._on and self._running_since is None
+                and self._pulse_release_at is None):
             return  # no-op, same as RelayChannel.set()
-
+ 
         target, other = (self._open_pin, self._close_pin) if want_open else (self._close_pin, self._open_pin)
         self._write(other, False)   # interlock: always drop the opposite side first
         self._write(target, True)
-
+ 
         if self.mode == "PULSE":
-            time.sleep(self.pulse_s)
-            self._write(target, False)  # auto-release
+            # NON-BLOCKING: previously this did time.sleep(self.pulse_s)
+            # here, which stalled the entire main_loop (no command
+            # polling, no heartbeat, no safety sweep, no OLED refresh)
+            # for the full pulse duration on every door command.
+            # Instead, record when the pulse should end; RelayManager's
+            # per-tick service_pulses() (called from main_loop) does
+            # the actual de-energize once that deadline passes.
+            self._pulse_release_at = time.time() + self.pulse_s
             self._running_since = None
         else:  # HOLD
             self._running_since = time.time()
-
+            self._pulse_release_at = None
+ 
         self._on = want_open
         config.ACTUATOR_STATES["door"] = 1 if self._on else 0
 
@@ -184,6 +193,26 @@ class DoorChannel:
         self._write(self._open_pin, False)
         self._write(self._close_pin, False)
         self._running_since = None
+        self._pulse_release_at = None
+        
+    # ---- PULSE-mode servicing (called every main_loop tick) ----
+    def pulse_due(self):
+        """True once an in-flight PULSE-mode pulse has reached its release deadline."""
+        return self._pulse_release_at is not None and time.time() >= self._pulse_release_at
+ 
+    def release_pulse(self):
+        """
+        De-energize the currently-pulsing pin. Distinct from stop():
+        this is the ordinary, expected end of a PULSE-mode command,
+        not a safety trip, so callers shouldn't log it as one. Logical
+        state (_on / ACTUATOR_STATES) is untouched - it was already
+        set correctly in set().
+        """
+        if self._pulse_release_at is None:
+            return
+        self._write(self._open_pin, False)
+        self._write(self._close_pin, False)
+        self._pulse_release_at = None        
 
     def on(self):
         self.set(True)
@@ -253,6 +282,20 @@ class RelayManager:
                     ch.off()
                 tripped.append(actuator_type)
         return tripped
+    
+    # ---- non-blocking pulse servicing (PULSE-mode doors) ----
+    def service_pulses(self):
+        """
+        Call every main loop tick (cheap - just a deadline check).
+        Releases any DoorChannel whose PULSE-mode pulse has timed out.
+        This replaces the old time.sleep(pulse_s) that used to block
+        the whole loop inside DoorChannel.set(). Not logged as a trip
+        (unlike safety_sweep) since this is the pulse completing
+        normally, not a stuck/runaway channel.
+        """
+        for ch in self.channels.values():
+            if hasattr(ch, "pulse_due") and ch.pulse_due():
+                ch.release_pulse()    
 
     def state_snapshot(self):
         return {t: ch.is_on() for t, ch in self.channels.items()}

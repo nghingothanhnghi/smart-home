@@ -42,6 +42,16 @@ AUTH_PASSWORD = AUTH_PASSWORD
 CLIENT_ID = "706cfcdc-5e1c-4bae-b159-f66425c81ecc"  # informational only — backend ignores this on writes
 USER_ID = 1                                          # informational only — backend ignores this on writes
 
+# ================================
+# 📍 DEVICE LOCATION
+# ================================
+# Sent to the backend as HydroDevice.location (plain string, e.g. for
+# grouping devices or POST /hydro/devices/location/{location}/control).
+# Since one codebase gets flashed to every board (see README's
+# "Multiple devices" section), set this PER BOARD before flashing -
+# leave as None/empty to skip syncing location entirely.
+DEVICE_LOCATION = "Greenhouse A"  # ASSUMPTION: placeholder - set the real location for this board
+
 # HEADERS starts with no Authorization — auth.login() fills it in at boot
 # (see auth.py) and can refresh it again later if a request comes back 401.
 HEADERS = {
@@ -112,7 +122,17 @@ TYPE_TO_HARDWARE = {
 # ================================
 DOOR_OPEN_PIN = 32
 DOOR_CLOSE_PIN = 23
-DOOR_MODE = "PULSE"        # "PULSE" (momentary trigger) or "HOLD" (energized while travelling)
+# "HOLD": relay stays energized while the door travels, until an
+# explicit stop command or DOOR_MAX_RUN_S trips. Switched from
+# "PULSE" because a stop command can only ever interrupt something
+# that's still energized - in PULSE mode the relay self-released
+# after DOOR_PULSE_S (2s), long before a stop sent from the backend
+# could arrive within the SEND_INTERVAL (10s) poll window, so `stop`
+# was a guaranteed no-op. Requires the door operator to be driven by
+# continuous power while travelling (with its own end-limit switches),
+# not a momentary trigger - confirm this matches the physical motor
+# controller before flashing.
+DOOR_MODE = "HOLD"
 DOOR_PULSE_S = 2           # PULSE mode: how long to energize the OPEN/CLOSE relay
 DOOR_MAX_RUN_S = 20        # HOLD mode: safety ceiling before force-stop
 
