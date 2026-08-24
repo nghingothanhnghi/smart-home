@@ -165,6 +165,8 @@ class ControlLoop:
                 continue
             
             if item.get("pending_command") == "stop":
+                if actuator_type not in stops:
+                    print("[control] pending_command=stop seen for", actuator_type)               
                 stops.add(actuator_type)
                 continue  # stop overrides on/off for this cycle - don't also queue on/off            
 
@@ -178,6 +180,7 @@ class ControlLoop:
         commands = [
             {"actuator_id": actuator_type, "action": "on" if on else "off"}
             for actuator_type, on in desired.items()
+            if actuator_type not in stops   # <-- stop wins regardless of which duplicate row set desired
         ]  
         commands += [{"actuator_id": t, "action": "stop"} for t in stops]
         return commands

@@ -54,17 +54,20 @@ class ActuatorManager:
             hardware = config.TYPE_TO_HARDWARE.get(actuator_type, "relay")
                 
             if hardware == "door":
-                # Backend's `port` column is a plain int - can't hold "32,23".
-                # Use the OPEN pin as the canonical port/pin for DB/display
-                # purposes; both real pins live in config.DOOR_OPEN_PIN /
-                # config.DOOR_CLOSE_PIN and are what relay.py actually uses.
+                # `port` (Integer) can only hold one pin - keep it as the open pin
+                # for numeric/back-compat display. `pin` (String) CAN hold both -
+                # store "open,close" there so the backend record actually reflects
+                # the real wiring instead of silently losing the close pin.
                 pin_field = config.DOOR_OPEN_PIN
+                pin_str = "%s,%s" % (config.DOOR_OPEN_PIN, config.DOOR_CLOSE_PIN)
                 supported = ["on", "off", "stop"]
             elif hardware == "mosfet":
                 pin_field = int(pin_no)
+                pin_str = str(pin_field)
                 supported = ["on", "off", "toggle", "speed"]
             else:
                 pin_field = int(pin_no)
+                pin_str = str(pin_field)
                 supported = ["on", "off", "toggle"]                
 
             label = _title_case(actuator_type.replace("_", " "))
@@ -73,8 +76,7 @@ class ActuatorManager:
                 "type": actuator_type,
                 "name": label,
                 "label": label,
-                "gpio": str(pin_field),
-                "pin": str(pin_field),
+                "pin": pin_str,        # <-- door now sends "32,23"
                 "port": pin_field,
                 "hardware": hardware,
                 "supported_actions": supported,
