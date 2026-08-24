@@ -75,7 +75,6 @@ class ActuatorManager:
                 "actuator_id": actuator_type,
                 "type": actuator_type,
                 "name": label,
-                "label": label,
                 "pin": pin_str,        # <-- door now sends "32,23"
                 "port": pin_field,
                 "hardware": hardware,
