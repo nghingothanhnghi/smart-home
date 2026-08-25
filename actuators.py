@@ -45,9 +45,12 @@ class ActuatorManager:
         for registration; omit it for state pushes where it's not
         needed).
 
-        'name' and 'port' are required by the backend's actuator
-        schema - 'label'/'gpio' are also included since they don't
-        hurt and are handy for debugging/other consumers.
+        Only fields present in HydroActuatorBase/Create/Update are sent -
+        'hardware' and 'supported_actions' aren't modeled server-side and
+        were previously silently dropped by pydantic on every call, so
+        they're not included anymore. That info stays firmware-side, in
+        config.TYPE_TO_HARDWARE.
+        
         """
         actuators = []
         for actuator_type, pin_no in config.TYPE_TO_GPIO.items():
@@ -60,15 +63,12 @@ class ActuatorManager:
                 # the real wiring instead of silently losing the close pin.
                 pin_field = config.DOOR_OPEN_PIN
                 pin_str = "%s,%s" % (config.DOOR_OPEN_PIN, config.DOOR_CLOSE_PIN)
-                supported = ["on", "off", "stop"]
             elif hardware == "mosfet":
                 pin_field = int(pin_no)
                 pin_str = str(pin_field)
-                supported = ["on", "off", "toggle", "speed"]
             else:
                 pin_field = int(pin_no)
-                pin_str = str(pin_field)
-                supported = ["on", "off", "toggle"]                
+                pin_str = str(pin_field)             
 
             label = _title_case(actuator_type.replace("_", " "))
             entry = {
@@ -77,8 +77,6 @@ class ActuatorManager:
                 "name": label,
                 "pin": pin_str,        # <-- door now sends "32,23"
                 "port": pin_field,
-                "hardware": hardware,
-                "supported_actions": supported,
             }
             if device_id is not None:
                 entry["device_id"] = device_id
