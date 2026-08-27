@@ -102,7 +102,6 @@ TYPE_TO_GPIO = {
     "light_4": "26",
     "light_5": "25",
     "light_6": "33",
-    "light_7": "4",     # ASSUMPTION: free GPIO, not in README's table - confirm wiring
     "sliding_door": "32,23",  # informational only for registration payload; see DOOR_* below
 }
 
@@ -113,7 +112,6 @@ TYPE_TO_HARDWARE = {
     "light_4": "relay",
     "light_5": "relay",
     "light_6": "relay",
-    "light_7": "relay",
     "sliding_door": "door",   # tells RelayManager to build a DoorChannel, not a RelayChannel
 }
 
@@ -145,7 +143,7 @@ PUMP_SPEED = {
 # 🔌 RUNTIME STATE STORAGE
 # ================================
 ACTUATOR_STATES = {
-    "13": 0, "14": 0, "27": 0, "26": 0, "25": 0, "33": 0, "4": 0,
+    "13": 0, "14": 0, "27": 0, "26": 0, "25": 0, "33": 0,
     "door": 0,   # 1 = logically open, 0 = logically closed
 }
 
