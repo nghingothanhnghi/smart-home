@@ -85,9 +85,15 @@ class Device:
     # Device itself: POST /hydro/devices
     # ---------------------------------------------------------
     def _register_device(self, ip_address):
+        location = getattr(config, "DEVICE_LOCATION", None)
         payload = {
             "device_id": self.device_id,
             "name": DEVICE_LABEL + " (" + self.device_id + ")",
+            "external_id": None,
+            "type": "controller",
+            "is_active": True,
+            "thresholds": None,
+            # client_id/ip_address: see module docstring note above.
             "client_id": config.CLIENT_ID,
             "ip_address": ip_address,
         }
@@ -97,7 +103,7 @@ class Device:
         # sending null) avoids ever clobbering a location that might
         # already be set some other way (e.g. dashboard) for a device
         # this firmware doesn't know has one.
-        location = getattr(config, "DEVICE_LOCATION", None)
+
         if location:
             payload["location"] = location        
         

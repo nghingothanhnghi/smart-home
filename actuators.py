@@ -107,6 +107,10 @@ class ActuatorManager:
                 "name": label,
                 "pin": pin_str,        # <-- door now sends "32,23"
                 "port": pin_field,
+                "is_active": True,
+                "default_state": False,  # every channel boots OFF (relay.py) - keep backend's default matching
+                "sensor_key": None,
+                "manual_state": None,    # AUTO by default; dashboard/app sets this to override
             }
             if device_id is not None:
                 entry["device_id"] = device_id

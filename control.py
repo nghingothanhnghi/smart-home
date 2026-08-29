@@ -60,6 +60,15 @@ except Exception:
 
 HTTP_TIMEOUT_S = getattr(config, "HTTP_TIMEOUT_S", 8)
 
+# Maps sensors.read_all()'s keys to the backend's SensorDataCreateSchema
+# 'data' field names - the backend doesn't know about our '_c'/'_pct'/
+# '_ppm' suffixed local names, and 'ec'/'ppm' are two separate backend
+# keys derived from the one EC/PPM probe we actually have.
+_SENSOR_KEY_MAP = {
+    "temperature_c": "temperature",
+    "humidity_pct": "humidity",
+    "ec_ppm": "ppm",
+}
 
 class ControlLoop:
     def __init__(self, device, actuator_manager):
