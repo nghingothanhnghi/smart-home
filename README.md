@@ -34,10 +34,10 @@ relay modules), coordinated by an existing FastAPI "hydro" backend.
   (`light_1`...`light_6`, `sliding_door`), builds the backend
   registration payload, and executes commands coming back from the
   backend.
-- **`control.py`**: Polls `GET /hydro/status` for desired actuator
-  state, executes it, and pushes optional sensor telemetry to
-  `POST /sensor/data`. Polling doubles as the heartbeat — there's no
-  separate heartbeat endpoint.
+- **`control.py`**: Polls `GET /hydro/status` (scoped to this device via
+  `?device_id=<numeric_id>`) for desired actuator state, executes it,
+  and pushes sensor telemetry to `POST /sensor/data`. Polling doubles
+  as the heartbeat — there's no separate heartbeat endpoint.
 - **`sensors.py`**: Optional DHT11 / analog EC-PPM readers, feeding
   `control.py`'s sensor push. Disabled by default
   (`config.ENABLE_SENSORS` not set → falls back to `False`) — kept so
@@ -127,12 +127,17 @@ Base URL: `config.FASTAPI_URL`. All authenticated requests carry
 ```
 POST /auth/login
   body (form-urlencoded): username, password
-  response: { access_token, ... }
+  response: { access_token, token_type }
   → JWT stored in config.HEADERS; auth.py re-logs-in automatically on any 401.
 
 POST /hydro/devices
-  body: { device_id, name, client_id, ip_address, location? }
-  response: { id, ... }               # numeric PK, resolved into Device.numeric_id
+  body (HydroDeviceCreate): {
+    device_id, name, external_id, location?, type, is_active, thresholds,
+    client_id, ip_address
+  }
+  response (HydroDeviceOut): { id, ... }   # numeric PK -> Device.numeric_id
+  → user_id/client_id are overwritten server-side from the authenticated
+    user regardless of what's sent, so client_id in the payload is inert.
   → 400 "already exists" is handled as success: falls back to
     GET /hydro/devices and matches by device_id to recover the numeric id.
 
@@ -149,27 +154,63 @@ GET  /actuators/device/{numeric_id}
     re-creates duplicate rows for the same device.
 
 POST /actuators/bulk
-  body: [ { actuator_id, type, name, pin, port, device_id }, ... ]
-  → CREATE-ONLY, not an upsert. Called exactly once per boot, only if
-    GET /actuators/device/{id} came back empty. Do not call this
-    repeatedly — see control.py's module docstring for the duplicate-row
-    incident this caused.
+  body (list of HydroActuatorCreate): [
+    { actuator_id, type, name, pin, port, is_active, default_state,
+      device_id, sensor_key, manual_state }, ...
+  ]
+  → CREATE-ONLY, not an upsert. device_id here is the NUMERIC PK from
+    the device-registration step, not the string device_id/DEVICE_CODE.
+    Called exactly once per boot, only if GET /actuators/device/{id}
+    came back empty. Do not call this repeatedly — see control.py's
+    module docstring for the duplicate-row incident this caused.
 
-GET  /hydro/status
-  response: [ { device_id (numeric), device_name, actuators: [
-      { type, current_state, manual_state, mode, pending_command, ... }
-  ] }, ... ]
-  → polled every config.SEND_INTERVAL (10s); doubles as the heartbeat
-    (no separate heartbeat endpoint). Desired state per actuator is
-    manual_state if not null (a dashboard/app override), else
-    current_state (the backend's own automation decision). A
-    pending_command of "stop" overrides on/off for that actuator this
-    cycle.
+GET  /hydro/status?device_id={numeric_id}
+  response: [ { device_id (numeric), device_name, location, sensors,
+      actuators: [
+        { id, name, type, pin, port, current_state, manual_state,
+          mode, pending_command, ... }
+      ], growing_batch, system, automation
+  }, ... ]
+  → polled every config.SEND_INTERVAL (10s), scoped to this device via
+    the query param; doubles as the heartbeat (no separate heartbeat
+    endpoint). Desired state per actuator is manual_state if not null
+    (a dashboard/app override), else current_state (the backend's own
+    automation decision). A pending_command of "stop" is fire-once —
+    cleared server-side the instant this GET reads it, so a missed
+    poll means a missed stop.
+  → ⚠️ 'type' is a generic hardware category, confirmed live to be
+    "light" for every one of the 6 lights (not light_1..light_6) — the
+    sliding door's type happens to be unique but that's incidental.
+    'name' is also unreliable: it's user-editable from the dashboard
+    (e.g. "Light 1" can be renamed "Đèn (Garage xe)" without changing
+    which GPIO it drives). The only field that reliably identifies a
+    physical channel is 'pin', so control.py matches each row back to
+    a config.TYPE_TO_GPIO entry by pin, not by type or name. A row
+    whose pin isn't in config.TYPE_TO_GPIO is skipped rather than
+    guessed at.
 
 POST /sensor/data
-  body: { device_id, timestamp, temperature_c?, humidity_pct?, ec_ppm? }
-  → pushed every config.SEND_INTERVAL if config.ENABLE_SENSORS is True.
+  body (SensorDataCreateSchema): {
+    device_id, client_id, data: { temperature?, humidity?, ec?, ppm? }
+  }
+  → device_id here is the STRING DEVICE_CODE (looked up via
+    get_device_by_external_id against HydroDevice.device_id) — NOT the
+    numeric id used by /actuators/bulk and /hydro/status. Readings are
+    nested under "data" using the backend's key names (temperature/
+    humidity/ppm), not sensors.py's local temperature_c/humidity_pct/
+    ec_ppm names — control.py remaps them before sending. Pushed every
+    config.SEND_INTERVAL if config.ENABLE_SENSORS is True. This call
+    also triggers the backend's automation_service.run_control_loop,
+    so it's what drives server-side automatic actuator decisions —
+    not just telemetry.
 ```
+
+**Two ID types, don't mix them up:**
+
+| Field | Where used | Value |
+|---|---|---|
+| `device_id` (string) | `POST /hydro/devices` body, `POST /sensor/data` body | `DEVICE_CODE` from `device_id.py` |
+| `device_id` (numeric) | `POST /actuators/bulk` body, `GET /hydro/status` query param | the `id` returned from `POST /hydro/devices` |
 
 Valid `actuator_id` / desired-state pairs the firmware understands:
 
@@ -254,6 +295,9 @@ risking hardware.
 | `[device] could not confirm actuator status, skipping bulk create` | `GET /actuators/device/{id}` failed — actuators won't register until this succeeds on a later boot/reconnect. |
 | Actuators registered multiple times | Something is calling `POST /actuators/bulk` outside of `device.py`'s guarded first-boot path — see `control.py`'s module docstring. |
 | Door `stop` command has no visible effect | `DOOR_MODE` is `"PULSE"` and the pulse already self-released before `stop` arrived — switch to `"HOLD"`. |
+| `[control] push sensor data rejected, status 422` | Sensor payload doesn't match `SensorDataCreateSchema` — confirm you're on the current `control.py` (readings nested under `"data"` with `temperature`/`humidity`/`ppm` keys, not the old flat `temperature_c`/`humidity_pct`/`ec_ppm` shape). |
+| `poll_status()` returns nothing even though the backend has commands queued | `Device.numeric_id` hasn't resolved yet (registration hasn't completed) — `GET /hydro/status` is scoped by `?device_id=<numeric_id>` and is skipped entirely until that id exists. |
+| A specific light never responds to backend commands, others do | Its backend actuator row's `pin` doesn't match any value in `config.TYPE_TO_GPIO` (e.g. the row was created manually on the dashboard, or `config.py`'s pin map drifted from what's actually registered) — `_extract_commands()` silently skips rows it can't map by pin rather than guessing. Check `GET /actuators/device/{numeric_id}` for the actual registered pins. |
 | OLED stays blank | Non-fatal — check serial log for `[oled] display not available, continuing without it: ...` and verify I2C wiring/address. |
 
 ## Scaling This Project
@@ -267,6 +311,7 @@ risking hardware.
 - **Add sensors**: set `config.ENABLE_SENSORS = True` (and optionally
   `DHT11_PIN` / `EC_PPM_ADC_PIN`), wire the hardware, and
   `control.py`'s tick will start pushing `sensors.read_all()` results
+  (remapped to the backend's `temperature`/`humidity`/`ppm` keys)
   automatically.
 - **Multiple devices**: since `device_id.py` derives a unique ID per
   board automatically, this exact codebase can be flashed to every
