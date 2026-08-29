@@ -160,8 +160,9 @@ class ControlLoop:
             if not isinstance(item, dict):
                 continue
 
-            actuator_type = item.get("type")
+            actuator_type = self.actuators.resolve_actuator_type(item)
             if actuator_type is None:
+                print("[control] could not resolve actuator for status row:", item)
                 continue
             
             if item.get("pending_command") == "stop":
@@ -178,10 +179,10 @@ class ControlLoop:
             desired[actuator_type] = bool(state)
 
         commands = [
-            {"actuator_id": actuator_type, "action": "on" if on else "off"}
-            for actuator_type, on in desired.items()
-            if actuator_type not in stops   # <-- stop wins regardless of which duplicate row set desired
-        ]  
+            {"actuator_id": t, "action": "on" if on else "off"}
+            for t, on in desired.items()
+            if t not in stops
+        ]
         commands += [{"actuator_id": t, "action": "stop"} for t in stops]
         return commands
 

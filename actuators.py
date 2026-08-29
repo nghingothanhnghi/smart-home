@@ -28,6 +28,36 @@ def _title_case(s):
 class ActuatorManager:
     def __init__(self):
         self.relays = RelayManager()
+        self._pin_to_type = self._build_pin_map()
+        
+    def _build_pin_map(self):
+        """
+        Maps the pin string we registered each actuator with
+        (config.TYPE_TO_GPIO's value) back to our local actuator_type
+        key (light_1..light_6, sliding_door). Backend rows are
+        identified by pin/port on their end - 'type' is a freeform,
+        user-editable label there (someone could rename a light's type
+        to 'pump' on the dashboard), so it can't be trusted to tell us
+        WHICH physical channel a /hydro/status row refers to.
+        """
+        pin_map = {}
+        for actuator_type, pin_no in config.TYPE_TO_GPIO.items():
+            hardware = config.TYPE_TO_HARDWARE.get(actuator_type, "relay")
+            pin_map[str(pin_no)] = actuator_type
+            if hardware == "door":
+                # Backend may report just the 'port' (open pin) rather
+                # than the combined "open,close" pin string we sent at
+                # registration - index that too.
+                pin_map[str(config.DOOR_OPEN_PIN)] = actuator_type
+        return pin_map
+
+    def resolve_actuator_type(self, item):
+        """actuator_type for a /hydro/status row, resolved by pin/port."""
+        for key in ("pin", "port"):
+            val = item.get(key)
+            if val is not None and str(val) in self._pin_to_type:
+                return self._pin_to_type[str(val)]
+        return None        
 
     # ---------------------------------------------------------
     # Registration payload (sent to POST /actuators/bulk)
