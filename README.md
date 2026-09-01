@@ -9,10 +9,10 @@ relay modules), coordinated by an existing FastAPI "hydro" backend.
 - **`main.py`**: Entry point. Boot sequence + main loop coordinating WiFi,
   actuators, backend control loop, safety sweep, and the OLED.
 - **`config.py`**: Centralized configuration — device identity, WiFi,
-  backend URLs, GPIO/pin map, door mode, timing constants. Imports
-  `AUTH_USERNAME` / `AUTH_PASSWORD` from `secrets.py`; WiFi `SSID` /
-  `PASSWORD` currently live directly in this file (see **Security note**
-  below).
+  backend URLs, GPIO/pin map, GPIO-expander definitions, door mode, timing
+  constants. Imports `AUTH_USERNAME` / `AUTH_PASSWORD` from `secrets.py`;
+  WiFi `SSID` / `PASSWORD` currently live directly in this file (see
+  **Security note** below).
 - **`secrets.py`**: Private backend login credentials
   (`AUTH_USERNAME`, `AUTH_PASSWORD`). **Do not commit this file** —
   already covered by `.gitignore`.
@@ -27,9 +27,19 @@ relay modules), coordinated by an existing FastAPI "hydro" backend.
   backend, resolves the backend's numeric device PK, and syncs
   `DEVICE_LOCATION` once per boot.
 - **`wifi.py`**: WiFi connect + reconnect-with-backoff.
+- **`gpio_manager.py`**: Turns a *pin descriptor string* (native GPIO
+  number, or `"mcp:<unit>:<pin>"` for an I2C expander pin) into an actual
+  pin object with a `machine.Pin`-shaped API. `relay.py` and
+  `actuators.py` go through this instead of touching `machine.Pin`/`PWM`
+  or an expander driver directly — see **GPIO Expansion** below.
+- **`mcp23017.py`**: Full driver for the MCP23017 16-bit I2C GPIO
+  expander (digital in/out, pull-ups, optional interrupt-on-change).
+  Used by `gpio_manager.py` whenever a `"mcp:..."` descriptor is
+  configured; untouched if you never add one.
 - **`relay.py`**: Hardware abstraction for every actuator channel —
   active-low relay logic, per-channel safety timeout, and the
   interlocked `DoorChannel` for the sliding door (PULSE or HOLD mode).
+  Builds every pin through `gpio_manager.py`.
 - **`actuators.py`**: Maps relay channels to logical actuator types
   (`light_1`...`light_6`, `sliding_door`), builds the backend
   registration payload, and executes commands coming back from the
@@ -79,6 +89,13 @@ Pins 34–39 (input-only) and the flash/strapping pins (0, 2\*, 6–12, 15)
 are deliberately avoided for relay outputs. `GPIO2` is only used for
 the onboard status LED, not a relay.
 
+If you later add an MCP23017 GPIO expander (see **GPIO Expansion**
+below), it shares the same I2C bus as the OLED (SDA 21 / SCL 22) by
+default — I2C is a shared bus, so this is expected and fine as long as
+each device has a distinct address (OLED 0x3C, MCP23017 0x20–0x27 via
+its A0–A2 pins). Use a separate `i2c_id`/pins in `config.GPIO_EXPANDERS`
+if you'd rather put it on its own bus.
+
 Door mode is configurable in `config.py` via `DOOR_MODE`:
 - **`"HOLD"` (current default)**: the OPEN/CLOSE relay stays energized
   for the whole travel time, until an explicit `stop` command or the
@@ -96,11 +113,59 @@ Door mode is configurable in `config.py` via `DOOR_MODE`:
   self-released is a no-op — use `HOLD` if you need `stop` to be
   meaningful.
 
+## GPIO Expansion (`gpio_manager.py` / `mcp23017.py`)
+
+Every pin used by `relay.py` — each light, and the door's OPEN/CLOSE
+pins — is a **pin descriptor string**, not a raw GPIO number, resolved
+through `gpio_manager.py`:
+
+- `"13"` → native ESP32 GPIO 13 (unchanged behavior; every existing
+  `config.py` value already uses this form).
+- `"mcp:0:5"` → pin 5 of the I2C GPIO expander registered as unit `"0"`
+  in `config.GPIO_EXPANDERS`.
+
+`relay.py` and `actuators.py` never import `machine.Pin`/`PWM` or an
+expander driver directly — they only ever call `gpio_manager.py`, so
+adding capacity or changing hardware never touches the actuator logic:
+
+- **Add a 7th light on an MCP23017 expander** (no free native GPIOs
+  left, or you just want to keep mains wiring off the main board):
+  1. In `config.py`, add an entry to `GPIO_EXPANDERS`, e.g.
+     `"0": {"driver": "mcp23017", "i2c_id": 0, "scl": 22, "sda": 21, "addr": 0x20}`.
+  2. Add `"light_7": "mcp:0:0"` to `TYPE_TO_GPIO` and
+     `"light_7": "relay"` to `TYPE_TO_HARDWARE`.
+  3. Done — `relay.py` builds a `RelayChannel` on that expander pin the
+     same way it builds one on a native GPIO; `actuators.py`'s
+     registration payload and `control.py`'s pin-matching already
+     understand both forms.
+- **Add a second expander chip / a different chip entirely** (PCF8574,
+  MCP23008, TCA9555, ...): write its driver with the same
+  `.pin(n, mode, pull) -> object with .value()/.on()/.off()` shape as
+  `mcp23017.py`, then register a builder for it in
+  `gpio_manager._BACKEND_FACTORIES` under its own `driver` name and
+  give it its own descriptor prefix in `gpio_manager._parse()` (e.g.
+  `"pcf:0:3"`). No changes needed in `relay.py`, `actuators.py`, or
+  `control.py`.
+
+**Hardware limitation — no PWM on expander pins:** the MCP23017 (and
+most simple I2C GPIO expanders) is digital in/out only, with no PWM
+peripheral behind it. `gpio_manager.get_pwm_pin()` raises a clear error
+at boot if a `TYPE_TO_HARDWARE = "mosfet"` entry points at an expander
+pin, rather than silently degrading a speed-controlled channel (e.g.
+`water_pump`) to plain on/off — keep PWM-capable actuators on native
+GPIOs.
+
+Bench-test any new expander-backed channel the same way you would a
+new relay: confirm the pin toggles correctly with the OLED/serial log
+before wiring it to a live 220V load, and get an electrician's sign-off
+on the mains side per the **Hardware / Wiring** warning above.
+
 ## Safety Design
 
 - Every relay/door channel boots into the OFF/closed state
   (`RelayChannel.__init__` / `DoorChannel.__init__` force `set(False)`
-  before anything else runs).
+  before anything else runs) — true whether the channel sits on a
+  native GPIO or a GPIO-expander pin.
 - `RelayManager.safety_sweep()` runs every loop iteration and force-offs
   (or `stop()`s, for the door) any channel that's exceeded its max
   on-time — protects against a stuck command, a crashed backend, or a
@@ -163,6 +228,12 @@ POST /actuators/bulk
     Called exactly once per boot, only if GET /actuators/device/{id}
     came back empty. Do not call this repeatedly — see control.py's
     module docstring for the duplicate-row incident this caused.
+  → `port` (Integer) is a synthetic value for expander pins
+    (`gpio_manager.registration_port()`: real GPIO number for native
+    pins, `9000 + unit*16 + pin` for expander pins — never collides
+    with a real ESP32 GPIO 0-39). `pin` (String) always carries the
+    human-readable descriptor (`"13"`, `"mcp:0:5"`, or `"32,23"` for
+    the door) so the physical wiring stays recoverable from the row.
 
 GET  /hydro/status?device_id={numeric_id}
   response: [ { device_id (numeric), device_name, location, sensors,
@@ -183,10 +254,10 @@ GET  /hydro/status?device_id={numeric_id}
     sliding door's type happens to be unique but that's incidental.
     'name' is also unreliable: it's user-editable from the dashboard
     (e.g. "Light 1" can be renamed "Đèn (Garage xe)" without changing
-    which GPIO it drives). The only field that reliably identifies a
-    physical channel is 'pin', so control.py matches each row back to
-    a config.TYPE_TO_GPIO entry by pin, not by type or name. A row
-    whose pin isn't in config.TYPE_TO_GPIO is skipped rather than
+    which GPIO it drives). The reliable fields are 'pin' and 'port',
+    which `actuators.py` matches back to a `config.TYPE_TO_GPIO`
+    descriptor (or its `gpio_manager.registration_port()`) — not by
+    type or name. A row that matches neither is skipped rather than
     guessed at.
 
 POST /sensor/data
@@ -238,6 +309,10 @@ Valid `actuator_id` / desired-state pairs the firmware understands:
      below).
    - Confirm `DOOR_MODE` matches what your physical door operator
      actually needs (see **Hardware / Wiring** above).
+   - Only if you're adding a GPIO expander: `GPIO_EXPANDERS` and any
+     `"mcp:..."` descriptors in `TYPE_TO_GPIO` — see **GPIO Expansion**
+     above. Leave `GPIO_EXPANDERS = {}` and every pin as a plain GPIO
+     number if you're not using one; nothing else changes.
 5. Reset the board. `main.py` runs automatically; watch the serial
    console (115200 baud) for boot/login/registration logs.
 
@@ -297,17 +372,23 @@ risking hardware.
 | Door `stop` command has no visible effect | `DOOR_MODE` is `"PULSE"` and the pulse already self-released before `stop` arrived — switch to `"HOLD"`. |
 | `[control] push sensor data rejected, status 422` | Sensor payload doesn't match `SensorDataCreateSchema` — confirm you're on the current `control.py` (readings nested under `"data"` with `temperature`/`humidity`/`ppm` keys, not the old flat `temperature_c`/`humidity_pct`/`ec_ppm` shape). |
 | `poll_status()` returns nothing even though the backend has commands queued | `Device.numeric_id` hasn't resolved yet (registration hasn't completed) — `GET /hydro/status` is scoped by `?device_id=<numeric_id>` and is skipped entirely until that id exists. |
-| A specific light never responds to backend commands, others do | Its backend actuator row's `pin` doesn't match any value in `config.TYPE_TO_GPIO` (e.g. the row was created manually on the dashboard, or `config.py`'s pin map drifted from what's actually registered) — `_extract_commands()` silently skips rows it can't map by pin rather than guessing. Check `GET /actuators/device/{numeric_id}` for the actual registered pins. |
+| A specific light never responds to backend commands, others do | Its backend actuator row's `pin`/`port` doesn't match any `config.TYPE_TO_GPIO` descriptor (e.g. the row was created manually on the dashboard, or `config.py`'s pin map drifted from what's actually registered) — `_extract_commands()` silently skips rows it can't map rather than guessing. Check `GET /actuators/device/{numeric_id}` for the actual registered pins. |
 | OLED stays blank | Non-fatal — check serial log for `[oled] display not available, continuing without it: ...` and verify I2C wiring/address. |
+| `gpio_manager: no config.GPIO_EXPANDERS entry for unit ...` | A `TYPE_TO_GPIO`/`DOOR_OPEN_PIN`/`DOOR_CLOSE_PIN` value uses `"mcp:<unit>:..."` but that unit id isn't in `config.GPIO_EXPANDERS` — add it or fix the typo. |
+| `gpio_manager: pin ... is on a GPIO expander, which has no PWM peripheral` | A `TYPE_TO_HARDWARE = "mosfet"` entry points at an `"mcp:..."` descriptor — expander pins are digital-only; move that channel to a native GPIO. |
 
 ## Scaling This Project
 
 - **Add a 7th light**: add one line to `TYPE_TO_GPIO` (and
-  `TYPE_TO_HARDWARE`) in `config.py`. Nothing else changes —
-  `actuators.py` and `relay.py` build the channel automatically.
+  `TYPE_TO_HARDWARE`) in `config.py` — a native GPIO number if you have
+  one free, or an expander descriptor (`"mcp:0:0"`) if you don't. See
+  **GPIO Expansion** above. Nothing else changes — `actuators.py` and
+  `relay.py` build the channel automatically either way.
 - **Add another door / curtain**: add a new `"door"`-hardware entry in
   `config.TYPE_TO_HARDWARE` and wire up its own open/close pins,
   following `DoorChannel`'s interlocked pattern.
+- **Run out of native GPIOs**: add an MCP23017 (or another chip — see
+  **GPIO Expansion**) instead of re-partitioning existing wiring.
 - **Add sensors**: set `config.ENABLE_SENSORS = True` (and optionally
   `DHT11_PIN` / `EC_PPM_ADC_PIN`), wire the hardware, and
   `control.py`'s tick will start pushing `sensors.read_all()` results
@@ -316,4 +397,5 @@ risking hardware.
 - **Multiple devices**: since `device_id.py` derives a unique ID per
   board automatically, this exact codebase can be flashed to every
   controller in the building — only `secrets.py`'s credentials and
-  `config.py`'s `DEVICE_LOCATION` differ per unit.
+  `config.py`'s `DEVICE_LOCATION` (and `GPIO_EXPANDERS`/pin map, if a
+  particular board has different hardware) differ per unit.
