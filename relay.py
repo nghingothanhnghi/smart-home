@@ -23,12 +23,21 @@ Safety watchdog: config.py doesn't define a max-on-time ceiling for
 this deployment, so a sane default is used unless one is added
 (config.DEFAULT_MAX_ON_TIME_S) - protects against a stuck command or
 dropped connection leaving a pump/valve/light energized indefinitely.
+
+Pin sourcing: every pin used here - config.TYPE_TO_GPIO's values,
+config.DOOR_OPEN_PIN, config.DOOR_CLOSE_PIN - is a *descriptor* handed
+to gpio_manager.py, not a raw GPIO number. This file never imports
+machine.Pin/PWM directly, so it doesn't need to know or care whether a
+given channel is a native ESP32 GPIO or a pin on an I2C GPIO expander
+(see gpio_manager.py and mcp23017.py) - that's resolved once, at
+channel-construction time, and everything below just calls
+.value()/.on()/.off()/.duty() on whatever object came back.
 """
 
 import time
-from machine import Pin, PWM
 
 import config
+import gpio_manager
 
 PWM_FREQ_HZ = 1000
 DEFAULT_MAX_ON_TIME_S = getattr(config, "DEFAULT_MAX_ON_TIME_S", 12 * 60 * 60)  # 12h
@@ -46,9 +55,12 @@ class RelayChannel:
         self.max_on_time_s = DEFAULT_MAX_ON_TIME_S if max_on_time_s is None else max_on_time_s
 
         if hardware == "mosfet":
-            self._pin = PWM(Pin(int(pin_no)), freq=PWM_FREQ_HZ)
+            # Raises a clear error here (not a mysterious later
+            # failure) if pin_no turns out to be a GPIO-expander
+            # descriptor - see gpio_manager.get_pwm_pin's docstring.
+            self._pin = gpio_manager.get_pwm_pin(pin_no, PWM_FREQ_HZ)
         else:
-            self._pin = Pin(int(pin_no), Pin.OUT)
+            self._pin = gpio_manager.get_digital_pin(pin_no, mode="out")
 
         self._on = None  # unknown until the first set() below - forces that first write through
         self._speed = 0
@@ -148,8 +160,8 @@ class DoorChannel:
         self.max_run_s = max_run_s
         self.active_low = config.RELAY_ACTIVE_LOW if hasattr(config, "RELAY_ACTIVE_LOW") else True
 
-        self._open_pin = Pin(int(open_pin), Pin.OUT)
-        self._close_pin = Pin(int(close_pin), Pin.OUT)
+        self._open_pin = gpio_manager.get_digital_pin(open_pin, mode="out")
+        self._close_pin = gpio_manager.get_digital_pin(close_pin, mode="out")
         self._write(self._open_pin, False)
         self._write(self._close_pin, False)
 

@@ -9,10 +9,15 @@ commands coming back from the GET /hydro/status poll.
 
 This is the layer you'd extend to add a new actuator type later
 (e.g. a second valve) - add it to config.TYPE_TO_GPIO /
-config.TYPE_TO_HARDWARE and it shows up here automatically.
+config.TYPE_TO_HARDWARE and it shows up here automatically. The same
+goes for moving a channel onto a GPIO expander pin (see
+gpio_manager.py / mcp23017.py) - TYPE_TO_GPIO's value is just a
+descriptor string, native or expander, and this file doesn't care
+which.
 """
 
 import config
+import gpio_manager
 from relay import RelayManager
 
 
@@ -32,23 +37,34 @@ class ActuatorManager:
         
     def _build_pin_map(self):
         """
-        Maps the pin string we registered each actuator with
-        (config.TYPE_TO_GPIO's value) back to our local actuator_type
-        key (light_1..light_6, sliding_door). Backend rows are
-        identified by pin/port on their end - 'type' is a freeform,
-        user-editable label there (someone could rename a light's type
-        to 'pump' on the dashboard), so it can't be trusted to tell us
-        WHICH physical channel a /hydro/status row refers to.
+        Maps identifiers a /hydro/status row could plausibly carry back
+        to our local actuator_type key (light_1..light_6, sliding_door):
+        the raw descriptor string we registered with (e.g. "13" or
+        "mcp:0:5", matching the row's 'pin' field) AND the synthetic
+        int gpio_manager.registration_port() sent as the row's 'port'
+        field. Backend rows are identified by pin/port on their end -
+        'type' is a freeform, user-editable label there (someone could
+        rename a light's type to 'pump' on the dashboard), so it can't
+        be trusted to tell us WHICH physical channel a /hydro/status
+        row refers to.
         """
         pin_map = {}
         for actuator_type, pin_no in config.TYPE_TO_GPIO.items():
             hardware = config.TYPE_TO_HARDWARE.get(actuator_type, "relay")
             pin_map[str(pin_no)] = actuator_type
+
             if hardware == "door":
-                # Backend may report just the 'port' (open pin) rather
-                # than the combined "open,close" pin string we sent at
-                # registration - index that too.
-                pin_map[str(config.DOOR_OPEN_PIN)] = actuator_type
+                # TYPE_TO_GPIO's value for the door ("32,23") is a
+                # combined, display-only string - not a real
+                # single-pin descriptor, so it can't go through
+                # gpio_manager.registration_port(). Index the actual
+                # open-pin descriptor (config.DOOR_OPEN_PIN) instead,
+                # since the backend may report just that as 'port'.
+                open_pin = config.DOOR_OPEN_PIN
+                pin_map[str(open_pin)] = actuator_type
+                pin_map[str(gpio_manager.registration_port(open_pin))] = actuator_type
+            else:
+                pin_map[str(gpio_manager.registration_port(pin_no))] = actuator_type
         return pin_map
 
     def resolve_actuator_type(self, item):
@@ -75,6 +91,15 @@ class ActuatorManager:
         for registration; omit it for state pushes where it's not
         needed).
 
+        'port' is an Integer column server-side, so it can't hold a
+        GPIO-expander descriptor like "mcp:0:5" directly -
+        gpio_manager.registration_port() gives back the real GPIO
+        number for native pins (unchanged from before expander support
+        existed) or a synthetic, collision-free int for expander pins.
+        'pin' (String) always carries the human-readable descriptor
+        itself, so the physical wiring is still recoverable from the
+        backend row.
+
         Only fields present in HydroActuatorBase/Create/Update are sent -
         'hardware' and 'supported_actions' aren't modeled server-side and
         were previously silently dropped by pydantic on every call, so
@@ -87,25 +112,24 @@ class ActuatorManager:
             hardware = config.TYPE_TO_HARDWARE.get(actuator_type, "relay")
                 
             if hardware == "door":
-                # `port` (Integer) can only hold one pin - keep it as the open pin
-                # for numeric/back-compat display. `pin` (String) CAN hold both -
-                # store "open,close" there so the backend record actually reflects
-                # the real wiring instead of silently losing the close pin.
-                pin_field = config.DOOR_OPEN_PIN
+                # `port` (Integer) can only hold one pin - keep it as the
+                # open pin's registration port for numeric/back-compat
+                # display. `pin` (String) CAN hold both - store
+                # "open,close" there so the backend record actually
+                # reflects the real wiring instead of silently losing
+                # the close pin.
+                pin_field = gpio_manager.registration_port(config.DOOR_OPEN_PIN)
                 pin_str = "%s,%s" % (config.DOOR_OPEN_PIN, config.DOOR_CLOSE_PIN)
-            elif hardware == "mosfet":
-                pin_field = int(pin_no)
-                pin_str = str(pin_field)
             else:
-                pin_field = int(pin_no)
-                pin_str = str(pin_field)             
+                pin_field = gpio_manager.registration_port(pin_no)
+                pin_str = str(pin_no)
 
             label = _title_case(actuator_type.replace("_", " "))
             entry = {
                 "actuator_id": actuator_type,
                 "type": actuator_type,
                 "name": label,
-                "pin": pin_str,        # <-- door now sends "32,23"
+                "pin": pin_str,        # <-- door: "32,23"; expander pin: e.g. "mcp:0:5"
                 "port": pin_field,
                 "is_active": True,
                 "default_state": False,  # every channel boots OFF (relay.py) - keep backend's default matching
@@ -205,3 +229,4 @@ class ActuatorManager:
 
     def all_off(self):
         self.relays.all_off()
+

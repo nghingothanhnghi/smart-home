@@ -91,9 +91,38 @@ AUTO_MODE = {"enabled": False}   # mutable dictionary
 # 👉 If False → controlled by backend
 
 # ================================
+# 🧩 GPIO EXPANDERS (optional)
+# ================================
+# Each entry is one physical I2C GPIO-expander chip, keyed by a short
+# unit id (a string, used in pin descriptor strings like "mcp:0:5"
+# below - see gpio_manager.py). Leave this dict empty if every
+# actuator uses a native ESP32 GPIO, as this deployment currently does
+# - gpio_manager.py never touches I2C for an expander unless some pin
+# descriptor actually asks for one.
+#
+# unit_cfg keys: driver (default "mcp23017"), i2c_id, scl, sda, addr,
+# freq (all optional except addr once you have more than one chip on
+# the bus - see the MCP23017's A0-A2 address pins).
+#
+# Example (uncomment + wire an MCP23017 before use):
+# GPIO_EXPANDERS = {
+#     "0": {"driver": "mcp23017", "i2c_id": 0, "scl": 22, "sda": 21, "addr": 0x20},
+# }
+GPIO_EXPANDERS = {}
+
+# ================================
 # ⚡ GPIO MAPPING (CRITICAL)
 # ================================
-# Map actuator type → GPIO PIN (STRING)
+# Map actuator type → pin descriptor (STRING). A descriptor is either
+# a native ESP32 GPIO number ("13") or an expander pin ("mcp:0:5" -
+# unit "0" from GPIO_EXPANDERS above, expander pin 5). Every value
+# here goes through gpio_manager.py, so mixing native and expander
+# pins in the same TYPE_TO_GPIO is fine - e.g. to add a 7th light on
+# an expander without touching relay.py/actuators.py, add
+# "light_7": "mcp:0:0" below (and "light_7": "relay" to
+# TYPE_TO_HARDWARE). Note: expander pins are digital in/out only (no
+# PWM) - don't point a "mosfet" TYPE_TO_HARDWARE entry at one, see
+# gpio_manager.get_pwm_pin's docstring.
 
 TYPE_TO_GPIO = {
     "light_1": "13",
@@ -120,6 +149,10 @@ TYPE_TO_HARDWARE = {
 # ================================
 DOOR_OPEN_PIN = 32
 DOOR_CLOSE_PIN = 23
+# Both DOOR_OPEN_PIN/DOOR_CLOSE_PIN are pin descriptors too (see the
+# GPIO MAPPING note above) - a plain int like 32 is a native GPIO,
+# same as always; "mcp:0:2" would put the door on an expander pin.
+#
 # "HOLD": relay stays energized while the door travels, until an
 # explicit stop command or DOOR_MAX_RUN_S trips. Switched from
 # "PULSE" because a stop command can only ever interrupt something
