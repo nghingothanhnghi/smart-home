@@ -3,7 +3,13 @@
 # 🔐 DEVICE ID (unique per ESP32)
 # ================================
 from device_id import get_device_code
-from secrets import AUTH_USERNAME, AUTH_PASSWORD
+from device_id import get_device_code
+from secrets import (
+    WIFI_SSID,
+    WIFI_PASSWORD,
+    AUTH_USERNAME,
+    AUTH_PASSWORD,
+)
 
 DEVICE_CODE = get_device_code()
 # 👉 This is sent to backend as `device_id`
@@ -12,8 +18,8 @@ DEVICE_CODE = get_device_code()
 # ================================
 # 📶 WIFI CONFIG
 # ================================
-SSID = "Oanh Nguyen 2.4Ghz"
-PASSWORD = "24322432"
+SSID = WIFI_SSID
+PASSWORD = WIFI_PASSWORD
 
 # ================================
 # 🌐 BACKEND BASE URL
