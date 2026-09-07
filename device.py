@@ -43,6 +43,7 @@ class Device:
         self.registered = False
         self._actuators_registered = False    # only bulk-register actuators ONCE per boot
         self._location_synced = False         # only PUT location ONCE per boot
+        self.actuator_ids_by_type = {}
 
     def register(self, ip_address):
         if not auth.is_authenticated():
@@ -78,6 +79,7 @@ class Device:
             return False
 
         self._actuators_registered = True
+        self._resolve_actuator_ids()   # ✅ NEW
         self.registered = True
         return True
 
@@ -265,6 +267,30 @@ class Device:
 
         payload = self.actuator_manager.registration_payload(device_id=self.numeric_id)
         return self._post(config.ACTUATOR_BULK_URL, payload, "actuators")
+    
+    def _resolve_actuator_ids(self):
+        """
+        Populates self.actuator_ids_by_type = {actuator_type: numeric_id}
+        by re-fetching this device's actuator rows and matching each
+        one back to a local type via pin/port — same technique
+        actuators.py.resolve_actuator_type() uses for /hydro/status
+        rows. control.py needs this to tag flow readings with the
+        backend's real actuator_id (int), since our local actuator_id
+        is just a type string like "water_pump".
+        """
+        existing = self._fetch_existing_actuators()
+        if not existing:
+            print("[device] could not resolve actuator ids for flow tagging")
+            return
+
+        mapping = {}
+        for item in existing:
+            actuator_type = self.actuator_manager.resolve_actuator_type(item)
+            if actuator_type is not None and "id" in item:
+                mapping[actuator_type] = item["id"]
+
+        self.actuator_ids_by_type = mapping
+        print("[device] resolved actuator ids:", mapping)    
 
     def _fetch_existing_actuators(self):
         """

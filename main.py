@@ -26,6 +26,7 @@ from actuators import ActuatorManager
 from device import Device
 from control import ControlLoop
 from oled_display import OledDisplay
+import flow_sensor
 
 DEVICE_LABEL = getattr(config, "DEVICE_MODEL", "esp32-hydro-controller")
 FIRMWARE_VERSION = getattr(config, "FIRMWARE_VERSION", "unknown")
@@ -42,6 +43,15 @@ def boot():
 
     wifi = WiFiManager()
     actuators = ActuatorManager()  # also forces all relays/mosfets OFF at init (safe state)
+    # Flow sensor pulse-counting is local-hardware-only (no WiFi/backend
+    # dependency), but a bad config.FLOW_SENSOR_PINS entry shouldn't be
+    # able to abort the whole boot - degrade to "no flow sensing" instead,
+    # same philosophy as the fatal-error handler in run() below.
+    try:
+        flow_sensor.init()
+    except Exception as e:
+        print("[main] flow_sensor init failed, continuing without flow sensing:", e)
+        
     device = Device(actuators)
     control = ControlLoop(device, actuators)
 

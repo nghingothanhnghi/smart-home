@@ -89,6 +89,28 @@ ACTUATOR_BULK_URL = ACTUATOR_URL + "/bulk"
 STATUS_URL = FASTAPI_URL + "/hydro/status"
 # ↔ GET → ESP32 fetch commands from backend
 
+FLOW_URL = FASTAPI_URL + "/hydro/flow-readings"
+
+# ================================
+# 💧 FLOW SENSORS (per pump)
+# ================================
+# Maps actuator TYPE (must match a key in TYPE_TO_GPIO for a pump) to
+# the native GPIO the flow sensor's pulse output is wired to.
+# MUST be a native pin ("34"), never "mcp:..." — see gpio_manager.py,
+# expander pins can't fire interrupts fast enough for pulse counting.
+FLOW_SENSOR_ENABLED = True
+
+FLOW_SENSOR_PINS = {
+    "water_pump": "34",
+    # "pump": "35",   # add a second one the same way if this board has 2 pumps
+}
+
+# Pulses-per-liter, from the sensor's datasheet (YF-S201 ≈ 450 P/L).
+# Calibrate per physical sensor if you want L/min to be accurate.
+FLOW_CALIBRATION = {
+    "water_pump": 450,
+}
+
 # ================================
 # 🤖 AUTO MODE FLAG
 # ================================

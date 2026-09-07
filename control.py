@@ -57,6 +57,11 @@ try:
     import sensors
 except Exception:
     sensors = None
+    
+try:                        # ✅ NEW
+    import flow_sensor
+except Exception:
+    flow_sensor = None    
 
 HTTP_TIMEOUT_S = getattr(config, "HTTP_TIMEOUT_S", 8)
 
@@ -208,6 +213,22 @@ class ControlLoop:
         payload = {"device_id": self.device.device_id, "timestamp": time.time()}
         payload.update(readings)
         self._post(config.SENSOR_URL, payload, "sensor data")
+        
+    def push_flow_data(self):
+        if flow_sensor is None:
+            return
+        readings = flow_sensor.read_all()   # {"water_pump": 3.42, ...}
+        if not readings:
+            return
+
+        for actuator_type, flow_rate in readings.items():
+            actuator_id = self.device.actuator_ids_by_type.get(actuator_type)
+            if actuator_id is None:
+                # Not resolved yet (e.g. very first boot, before
+                # _resolve_actuator_ids ran) — skip, retry next cycle.
+                continue
+            payload = {"actuator_id": actuator_id, "flow_rate": flow_rate}
+            self._post(config.FLOW_URL, payload, "flow reading (%s)" % actuator_type)        
 
     def _post(self, url, payload, label):
         body = ujson.dumps(payload)
@@ -254,3 +275,4 @@ class ControlLoop:
         if now - self._last_sensor_push >= config.SEND_INTERVAL:
             self._last_sensor_push = now
             self.push_sensor_data()
+            self.push_flow_data()
