@@ -213,3 +213,8 @@ def read_all():
         "humidity_pct": hum,
         "ec_ppm": ppm,
     }
+
+    if rain is not None:
+        data.update(rain)
+
+    return data

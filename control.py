@@ -210,8 +210,17 @@ class ControlLoop:
         if not readings:
             return
 
-        payload = {"device_id": self.device.device_id, "timestamp": time.time()}
-        payload.update(readings)
+        data = {}
+        for local_key, value in readings.items():
+            if value is None:
+                continue
+            backend_key = _SENSOR_KEY_MAP.get(local_key, local_key)
+            data[backend_key] = value
+
+        if not data:
+            return
+
+        payload = {"device_id": self.device.device_id, "data": data}
         self._post(config.SENSOR_URL, payload, "sensor data")
         
     def push_flow_data(self):
