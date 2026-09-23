@@ -91,6 +91,17 @@ STATUS_URL = FASTAPI_URL + "/hydro/status"
 
 FLOW_URL = FASTAPI_URL + "/hydro/flow-readings"
 
+ENABLE_SENSORS = True
+
+DHT11_PIN = 4
+EC_PPM_ADC_PIN = 35
+
+RAIN_SENSOR_ADC_PIN = 32
+RAIN_SENSOR_DIGITAL_PIN = 33
+
+RAIN_DIGITAL_ACTIVE_LOW = True
+
+
 # ================================
 # 💧 FLOW SENSORS (per pump)
 # ================================
