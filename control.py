@@ -221,6 +221,9 @@ class ControlLoop:
             return
 
         payload = {"device_id": self.device.device_id, "data": data}
+        
+        print("[control] sensor payload:", payload)
+        
         self._post(config.SENSOR_URL, payload, "sensor data")
         
     def push_flow_data(self):

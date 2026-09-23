@@ -3,7 +3,6 @@
 # 🔐 DEVICE ID (unique per ESP32)
 # ================================
 from device_id import get_device_code
-from device_id import get_device_code
 from secrets import (
     WIFI_SSID,
     WIFI_PASSWORD,
@@ -91,6 +90,7 @@ STATUS_URL = FASTAPI_URL + "/hydro/status"
 
 FLOW_URL = FASTAPI_URL + "/hydro/flow-readings"
 
+
 ENABLE_SENSORS = True
 
 DHT11_PIN = 4
@@ -100,7 +100,6 @@ RAIN_SENSOR_ADC_PIN = 32
 RAIN_SENSOR_DIGITAL_PIN = 33
 
 RAIN_DIGITAL_ACTIVE_LOW = True
-
 
 # ================================
 # 💧 FLOW SENSORS (per pump)
@@ -121,6 +120,8 @@ FLOW_SENSOR_PINS = {
 FLOW_CALIBRATION = {
     "water_pump": 450,
 }
+
+
 
 # ================================
 # 🤖 AUTO MODE FLAG
@@ -230,3 +231,5 @@ RELAY_ACTIVE_LOW = True
 # ================================
 SEND_INTERVAL = 10  # seconds (send sensor data)
 RETRY_DELAY = 5     # seconds (retry when failed)
+
+
