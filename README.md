@@ -288,7 +288,7 @@ Valid `actuator_id` / desired-state pairs the firmware understands:
 | actuator_id | supported actions |
 |---|---|
 | `light_1` … `light_6` | `on`, `off`, `toggle` |
-| `sliding_door` | `on` (open), `off` (close), `toggle`, `stop` (HOLD mode only) |
+| `sliding_door` | `on` (up), `off` (down), `toggle`, `stop` (HOLD mode only) |
 
 ## Setup
 
