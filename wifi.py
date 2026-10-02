@@ -26,6 +26,38 @@ class WiFiManager:
         self._activate()
         self._backoff_index = 0
 
+    async def connect_async(self):
+        """Like connect(), but yields to uasyncio instead of time.sleep()."""
+        import uasyncio as asyncio
+        if self.is_connected():
+            return True
+        try:
+            self._wlan.disconnect()          # cancel any half-finished attempt
+        except OSError:
+            pass
+        try:
+            self._wlan.connect(config.SSID, config.PASSWORD)
+        except OSError as e:
+            print("[wifi] connect() raised %s, resetting interface" % e)
+            self._wlan.active(False)
+            await asyncio.sleep_ms(300)
+            self._wlan.active(True)
+            await asyncio.sleep_ms(300)
+            try:
+                self._wlan.connect(config.SSID, config.PASSWORD)
+            except OSError as e2:
+                print("[wifi] connect() still failing:", e2)
+                return False
+
+        start = time.ticks_ms()
+        while not self._wlan.isconnected():
+            if time.ticks_diff(time.ticks_ms(), start) > CONNECT_TIMEOUT_S * 1000:
+                print("[wifi] connect timed out")
+                return False
+            await asyncio.sleep_ms(500)
+        print("[wifi] connected, ip =", self._wlan.ifconfig()[0])
+        return True        
+
     def _activate(self):
         """
         (Re)bring the STA interface up. A short settle delay after
@@ -101,3 +133,4 @@ class WiFiManager:
         delay = table[min(self._backoff_index, len(table) - 1)]
         self._backoff_index += 1
         return delay
+

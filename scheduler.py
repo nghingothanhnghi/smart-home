@@ -4,119 +4,132 @@ scheduler.py
 Offline-capable schedule executor for the hydro controller.
 
 Design
-  * The backend's growing_batch (stages -> recipes) is compacted into a
-    small JSON file in flash every time a /hydro/status poll succeeds.
+  * GET /hydro/config?device_id=<DEVICE_CODE> (small, per-device) returns
+    each actuator's `schedules` [{start,end,days,on_min,off_min}].
+    A background task fetches it whenever the backend is reachable and
+    caches a compact form in flash (schedule.json).
+  * Backend rows are matched to local channels by pin/port (same as
+    actuators.resolve_actuator_type) - NOT by the generic 'type'/'name'.
   * Evaluation is LEVEL-based and stateless: every second we compute
-    "what should each scheduled channel be right now?" from the wall
-    clock and the schedule. No timers/edges to lose, so reboots, NTP
-    jumps and missed ticks can't desynchronise it.
-  * Online  (backend polled OK within OFFLINE_AFTER_S): the backend
-    drives actuators via control.py exactly as before; this module only
-    caches the schedule.
-  * Offline: control.py is not polled (no blocking HTTP) and this
-    module drives the channels from the cached schedule.
-  * All network work done here (WiFi reconnect, backend probe) is
-    uasyncio-friendly so it never delays schedule execution.
-
-The sliding door is NEVER driven by the scheduler.
+    "should this channel be on right now?" from the wall clock. Reboots,
+    missed ticks and NTP jumps can't desynchronise it.
+  * Online  (control.py polled /hydro/status OK within OFFLINE_AFTER_S):
+    backend drives actuators as before.
+  * Offline: control.py isn't polled; this module drives every channel
+    that has a cached schedule. Channels with no schedule are left alone
+    (the 12h safety sweep still applies). Manual overrides can't arrive
+    while offline.
+  * The sliding door is NEVER driven by the scheduler.
 """
 
 import gc
 import json
 import os
 import time
+import ujson
+import urequests
 import uasyncio as asyncio
 
 import config
+import auth
 
 SCHEDULE_FILE = getattr(config, "SCHEDULE_FILE", "schedule.json")
+CONFIG_URL = getattr(config, "CONFIG_URL", config.FASTAPI_URL + "/hydro/config")
 TZ_OFFSET_S = getattr(config, "TZ_OFFSET_S", 7 * 3600)        # Vietnam = UTC+7
 OFFLINE_AFTER_S = getattr(config, "OFFLINE_AFTER_S", 3 * config.SEND_INTERVAL)
+SYNC_INTERVAL_S = getattr(config, "SCHEDULE_SYNC_S", 60)
+HTTP_TIMEOUT_S = getattr(config, "HTTP_TIMEOUT_S", 8)
 PROBE_TIMEOUT_S = getattr(config, "PROBE_TIMEOUT_S", 3)
 NTP_RESYNC_S = getattr(config, "NTP_RESYNC_S", 6 * 3600)
 NTP_RETRY_S = 300
 MIN_VALID_YEAR = 2024
 WIFI_BACKOFF_S = getattr(config, "WIFI_RETRY_BACKOFF_S", (2, 5, 10, 20, 30))
+SCHEMA = 2
+
+_DAYS = {"mon": 0, "tue": 1, "wed": 2, "thu": 3, "fri": 4, "sat": 5, "sun": 6}
 
 
 # ---------------------------------------------------------------------------
 # Pure helpers (no hardware) - easy to unit test on a PC with CPython
 # ---------------------------------------------------------------------------
-def _hms(s):
+def _hm(s):
     p = s.split(":")
     return int(p[0]) * 3600 + int(p[1]) * 60 + (int(p[2]) if len(p) > 2 else 0)
 
 
-def compact_from_status(entry):
+def _daymask(s):
+    """'mon,tue' -> bitmask (bit0 = Monday). Empty/None = every day."""
+    if not s:
+        return 127
+    m = 0
+    for d in s.split(","):
+        i = _DAYS.get(d.strip().lower()[:3])
+        if i is not None:
+            m |= 1 << i
+    return m
+
+
+def compact_from_config(data, resolve):
     """
-    /hydro/status device entry -> compact schedule dict, or None if the
-    entry has no growing_batch key at all (don't wipe a good cache on a
-    malformed response). Recipes become [type, action, start_s, end_s,
-    on_min, off_min].
+    /hydro/config response -> {"v":2,"a":{local_type: [[s0,s1,mask,on_m,off_m],...]}}
+    `resolve(row)` maps a backend actuator row to a local actuator type
+    (or None). Only actuators WITH schedules are kept. Returns None if
+    the response is malformed so a good cache is never wiped by junk.
     """
-    if "growing_batch" not in entry:
+    acts = data.get("actuators") if isinstance(data, dict) else None
+    if not isinstance(acts, list):
         return None
-    gb = entry.get("growing_batch") or {}
-    start = gb.get("start_date")
-    stages = []
-    if start and gb.get("status", "growing") == "growing":
-        for st in gb.get("stages") or []:
-            recs = []
-            for r in st.get("recipes") or []:
-                try:
-                    recs.append([
-                        r["actuator_type"], r.get("action", "on"),
-                        _hms(r["start_time"]), _hms(r["end_time"]),
-                        r.get("interval_on_min") or 0,
-                        r.get("interval_off_min") or 0,
-                    ])
-                except Exception:
-                    continue
-            stages.append({"ds": st.get("day_start", 0),
-                           "de": st.get("day_end", 99999), "r": recs})
-    return {"v": 1, "start": start, "stages": stages}
+    out = {}
+    for a in acts:
+        scheds = a.get("schedules") or []
+        if not scheds:
+            continue
+        typ = resolve(a)
+        if typ is None:
+            print("[sched] backend actuator id=%s pin=%s not on this board, skipped"
+                  % (a.get("id"), a.get("pin")))
+            continue
+        lst = out.setdefault(typ, [])
+        for s in scheds:
+            try:
+                lst.append([_hm(s["start"]), _hm(s["end"]), _daymask(s.get("days")),
+                            s.get("on_min") or 0, s.get("off_min") or 0])
+            except Exception:
+                continue
+    return {"v": SCHEMA, "a": out}
 
 
 def desired_states(sched, local_s):
-    """
-    {actuator_type: bool} for every type mentioned anywhere in the
-    schedule. local_s = time.time() + TZ offset (device epoch).
-    Types outside every active window resolve to False.
-    """
-    if not sched or not sched.get("start"):
+    """{local_type: bool} for every type that has a schedule. local_s = time.time()+TZ."""
+    if not sched or sched.get("v") != SCHEMA:
         return {}
     t = time.localtime(local_s)
     sod = t[3] * 3600 + t[4] * 60 + t[5]
-    y, m, d = [int(x) for x in sched["start"][:10].split("-")]
-    day = (local_s - time.mktime((y, m, d, 0, 0, 0, 0, 0))) // 86400
-
+    wd = t[6]                    # 0 = Monday
+    prev = (wd - 1) % 7
     out = {}
-    forced_off = set()
-    for st in sched["stages"]:                      # managed set = all stages
-        for rec in st["r"]:
-            out[rec[0]] = False
-    for st in sched["stages"]:
-        if not (st["ds"] <= day < st["de"]):
-            continue
-        for typ, act, s0, s1, on_m, off_m in st["r"]:
+    for typ, wins in sched["a"].items():
+        on = False
+        for s0, s1, mask, on_m, off_m in wins:
             if s0 <= s1:
-                inside = s0 <= sod < s1
+                if not (s0 <= sod < s1 and (mask >> wd) & 1):
+                    continue
                 elapsed = sod - s0
-            else:                                   # window wraps midnight
-                inside = sod >= s0 or sod < s1
-                elapsed = sod - s0 if sod >= s0 else sod + 86400 - s0
-            if not inside:
-                continue
-            if on_m and off_m:                      # interval mode inside window
-                inside = elapsed % ((on_m + off_m) * 60) < on_m * 60
-            if not inside:
-                continue
-            if act == "off":
-                forced_off.add(typ)
+            elif sod >= s0:                         # wraps midnight, evening part
+                if not (mask >> wd) & 1:
+                    continue
+                elapsed = sod - s0
+            elif sod < s1:                          # wraps midnight, morning part
+                if not (mask >> prev) & 1:          # belongs to YESTERDAY's entry
+                    continue
+                elapsed = sod + 86400 - s0
             else:
-                out[typ] = True
-    for typ in forced_off:
-        out[typ] = False
+                continue
+            if on_m and off_m and elapsed % ((on_m + off_m) * 60) >= on_m * 60:
+                continue                            # in the "off" half of an interval
+            on = True
+            break
+        out[typ] = on
     return out
 
 
@@ -159,10 +172,13 @@ class Scheduler:
     def load(self):
         try:
             with open(SCHEDULE_FILE) as f:
-                self.sched = json.load(f)
-            self._saved_hash = hash(json.dumps(self.sched))
-            print("[sched] loaded cached schedule,", len(self.sched.get("stages", [])), "stage(s)")
-        except Exception as e:           # missing or corrupt -> run with none
+                s = json.load(f)
+            if s.get("v") != SCHEMA:
+                raise ValueError("old schema")
+            self.sched = s
+            self._saved_hash = hash(json.dumps(s))
+            print("[sched] loaded cached schedule for:", list(s["a"].keys()))
+        except Exception as e:           # missing/corrupt/old -> run with none
             print("[sched] no usable cached schedule:", e)
             self.sched = None
 
@@ -189,13 +205,45 @@ class Scheduler:
         self.sched = sched
         self._save(sched)
 
-    # ---- hooks called from control.py -------------------------------
+    # ---- backend sync ------------------------------------------------
+    def _fetch_config(self):
+        """Blocking GET (small payload). Returns parsed dict or None."""
+        url = CONFIG_URL + "?device_id=" + auth._url_escape(config.DEVICE_CODE)
+        try:
+            resp = urequests.get(url, headers=auth.build_headers(), timeout=HTTP_TIMEOUT_S)
+            if resp.status_code == 401:
+                resp.close()
+                if not auth.login():
+                    return None
+                resp = urequests.get(url, headers=auth.build_headers(), timeout=HTTP_TIMEOUT_S)
+            if resp.status_code != 200:
+                print("[sched] config fetch status", resp.status_code)
+                resp.close()
+                return None
+            data = resp.json()
+            resp.close()
+            return data
+        except Exception as e:
+            print("[sched] config fetch failed:", e)
+            return None
+
+    def sync_once(self):
+        data = self._fetch_config()
+        if data is None:
+            return False
+        sched = compact_from_config(data, self.actuators.resolve_actuator_type)
+        del data
+        gc.collect()
+        if sched is None:
+            print("[sched] config response malformed, keeping cached schedule")
+            return False
+        self.set_schedule(sched)
+        return True
+
+    # ---- hooks -------------------------------------------------------
     def on_status(self, entry):
-        """control.poll_status() calls this with our device's entry."""
+        """control.poll_status() calls this: backend is alive and commanding."""
         self._ok_ms = time.ticks_ms()
-        sched = compact_from_status(entry)
-        if sched is not None:
-            self.set_schedule(sched)
 
     def latch(self, tripped):
         for t in tripped or ():
@@ -256,6 +304,15 @@ class Scheduler:
                 wdt.feed()
             self.apply()
             await asyncio.sleep(1)
+
+    async def sync_task(self, wifi):
+        """Refresh the cached schedule while the backend is reachable."""
+        while True:
+            if wifi.is_connected() and self.reachable:
+                ok = self.sync_once()      # short blocking call, only when probe passed
+                await asyncio.sleep(SYNC_INTERVAL_S if ok else 15)
+            else:
+                await asyncio.sleep(5)
 
     async def wifi_task(self, wifi):
         idx = 0

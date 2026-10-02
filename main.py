@@ -7,6 +7,7 @@ Entry point (uasyncio version). Responsibilities ONLY:
        - scheduler.run        : executes the cached schedule when offline
        - scheduler.wifi_task  : non-blocking WiFi reconnect w/ backoff
        - scheduler.probe_task : non-blocking "is the backend reachable?"
+       - scheduler.sync_task  : refreshes cached schedule from /hydro/config
        - scheduler.ntp_task   : clock sync (needed for the schedule)
        - io_loop              : backend polling (only when reachable),
                                 relay safety sweep, OLED
@@ -133,6 +134,7 @@ async def main_async(wifi, actuators, device, control, oled, sched):
     tasks = [
         asyncio.create_task(supervise("scheduler", lambda: sched.run(wdt), actuators)),
         asyncio.create_task(supervise("wifi", lambda: sched.wifi_task(wifi), actuators)),
+        asyncio.create_task(supervise("sync", lambda: sched.sync_task(wifi), actuators)),
         asyncio.create_task(supervise("probe", lambda: sched.probe_task(wifi), actuators)),
         asyncio.create_task(supervise("ntp", lambda: sched.ntp_task(wifi), actuators)),
         asyncio.create_task(supervise("io", lambda: io_loop(wifi, actuators, device, control, oled, sched), actuators)),

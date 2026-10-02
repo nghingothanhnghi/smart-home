@@ -1,0 +1,115 @@
+
+{
+    "id": 2,
+    "device_id": "esp32_88:57:21:68:c0:90",
+    "active": true,
+    "thresholds": {
+        "moisture_min": 30,
+        "light_min": 300,
+        "temperature_max": 28,
+        "water_level_min": 5,
+        "water_level_critical": 2,
+        "ec_min": 1.2,
+        "ec_max": 2.5,
+        "ppm_min": 600,
+        "ppm_max": 1000,
+        "rain_strong_threshold": 10.0
+    },
+    "actuators": [
+        {
+            "id": 8,
+            "type": "pump",
+            "pin": "25",
+            "port": 1,
+            "state": false,
+            "manual": null,
+            "schedules": []
+        },
+        {
+            "id": 9,
+            "type": "fan",
+            "pin": "23",
+            "port": 2,
+            "state": true,
+            "manual": null,
+            "schedules": []
+        },
+        {
+            "id": 10,
+            "type": "light",
+            "pin": "27",
+            "port": 3,
+            "state": false,
+            "manual": null,
+            "schedules": []
+        },
+        {
+            "id": 11,
+            "type": "water_pump",
+            "pin": "16",
+            "port": 4,
+            "state": false,
+            "manual": null,
+            "schedules": []
+        },
+        {
+            "id": 12,
+            "type": "valve",
+            "pin": "18",
+            "port": 5,
+            "state": false,
+            "manual": null,
+            "schedules": [
+                {
+                    "start": "18:00",
+                    "end": "18:05",
+                    "days": "mon,tue,wed,thu,fri,sat,sun",
+                    "on_min": null,
+                    "off_min": null
+                },
+                {
+                    "start": "13:30",
+                    "end": "13:35",
+                    "days": "mon,tue,wed,thu,fri,sat,sun",
+                    "on_min": null,
+                    "off_min": null
+                },
+                {
+                    "start": "14:00",
+                    "end": "14:05",
+                    "days": "mon,tue,wed,thu,fri,sat,sun",
+                    "on_min": null,
+                    "off_min": null
+                },
+                {
+                    "start": "15:00",
+                    "end": "15:05",
+                    "days": "mon,tue,wed,thu,fri,sat,sun",
+                    "on_min": null,
+                    "off_min": null
+                },
+                {
+                    "start": "16:00",
+                    "end": "16:05",
+                    "days": "mon,tue,wed,thu,fri,sat,sun",
+                    "on_min": null,
+                    "off_min": null
+                },
+                {
+                    "start": "09:10",
+                    "end": "09:15",
+                    "days": "mon,tue,wed,thu,fri,sat,sun",
+                    "on_min": null,
+                    "off_min": null
+                },
+                {
+                    "start": "20:35",
+                    "end": "20:40",
+                    "days": "mon,tue,wed,thu,fri,sat,sun",
+                    "on_min": null,
+                    "off_min": null
+                }
+            ]
+        }
+    ]
+}

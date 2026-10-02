@@ -1,0 +1,1019 @@
+[
+    {
+        "device_id": 1,
+        "device_name": "esp32-hydro-controller (esp32-b0cbd8e2d45c)",
+        "location": "Greenhouse A",
+        "sensors": {
+            "device_id": 1,
+            "device_name": "esp32-hydro-controller (esp32-b0cbd8e2d45c)",
+            "temperature": 0.0,
+            "humidity": 0.0,
+            "light": 0.0,
+            "moisture": 0.0,
+            "ec": 0.0,
+            "ppm": 1000.0,
+            "water_level": 0.0,
+            "rain_detected": false,
+            "rain_intensity": 0.0,
+            "rain_detected_effective": false
+        },
+        "actuators": [
+            {
+                "id": 1,
+                "name": "Light 4",
+                "type": "light_4",
+                "pin": "26",
+                "port": 26,
+                "is_active": true,
+                "default_state": false,
+                "sensor_key": null,
+                "linked_sensor_value": null,
+                "current_state": false,
+                "last_state_changed_at": null,
+                "manual_state": null,
+                "mode": "auto",
+                "automation_reason": "sensor_off",
+                "interval_mode": "inactive",
+                "oneshot": "inactive",
+                "sensor_triggered": false,
+                "pending_command": null
+            },
+            {
+                "id": 2,
+                "name": "Light 5",
+                "type": "light_5",
+                "pin": "25",
+                "port": 25,
+                "is_active": true,
+                "default_state": false,
+                "sensor_key": null,
+                "linked_sensor_value": null,
+                "current_state": false,
+                "last_state_changed_at": null,
+                "manual_state": null,
+                "mode": "auto",
+                "automation_reason": "sensor_off",
+                "interval_mode": "inactive",
+                "oneshot": "inactive",
+                "sensor_triggered": false,
+                "pending_command": null
+            },
+            {
+                "id": 3,
+                "name": "Light 6",
+                "type": "light_6",
+                "pin": "33",
+                "port": 33,
+                "is_active": true,
+                "default_state": false,
+                "sensor_key": null,
+                "linked_sensor_value": null,
+                "current_state": false,
+                "last_state_changed_at": null,
+                "manual_state": null,
+                "mode": "auto",
+                "automation_reason": "sensor_off",
+                "interval_mode": "inactive",
+                "oneshot": "inactive",
+                "sensor_triggered": false,
+                "pending_command": null
+            },
+            {
+                "id": 4,
+                "name": "Sliding Door",
+                "type": "sliding_door",
+                "pin": "32,23",
+                "port": 32,
+                "is_active": true,
+                "default_state": false,
+                "sensor_key": null,
+                "linked_sensor_value": null,
+                "current_state": false,
+                "last_state_changed_at": "2026-09-28T10:52:49.264244",
+                "manual_state": null,
+                "mode": "auto",
+                "automation_reason": "sensor_off",
+                "interval_mode": "inactive",
+                "oneshot": "inactive",
+                "sensor_triggered": false,
+                "pending_command": null
+            },
+            {
+                "id": 5,
+                "name": "Light 1",
+                "type": "light_1",
+                "pin": "13",
+                "port": 13,
+                "is_active": true,
+                "default_state": false,
+                "sensor_key": null,
+                "linked_sensor_value": null,
+                "current_state": false,
+                "last_state_changed_at": null,
+                "manual_state": null,
+                "mode": "auto",
+                "automation_reason": "sensor_off",
+                "interval_mode": "inactive",
+                "oneshot": "inactive",
+                "sensor_triggered": false,
+                "pending_command": null
+            },
+            {
+                "id": 6,
+                "name": "Light 2",
+                "type": "light_2",
+                "pin": "14",
+                "port": 14,
+                "is_active": true,
+                "default_state": false,
+                "sensor_key": null,
+                "linked_sensor_value": null,
+                "current_state": false,
+                "last_state_changed_at": null,
+                "manual_state": null,
+                "mode": "auto",
+                "automation_reason": "sensor_off",
+                "interval_mode": "inactive",
+                "oneshot": "inactive",
+                "sensor_triggered": false,
+                "pending_command": null
+            },
+            {
+                "id": 7,
+                "name": "Light 3",
+                "type": "light",
+                "pin": "27",
+                "port": 27,
+                "is_active": true,
+                "default_state": false,
+                "sensor_key": null,
+                "linked_sensor_value": null,
+                "current_state": true,
+                "last_state_changed_at": "2026-10-01T08:30:06.223284",
+                "manual_state": null,
+                "mode": "auto",
+                "automation_reason": "schedule",
+                "interval_mode": "inactive",
+                "oneshot": "inactive",
+                "sensor_triggered": true,
+                "pending_command": null
+            }
+        ],
+        "growing_batch": {
+            "id": 1,
+            "plant_name": "Xà lách Crispy",
+            "plan_id": 4,
+            "plan_name": "sang",
+            "start_date": "2026-09-29",
+            "days_growing": 3,
+            "current_stage": "abc",
+            "current_stage_id": 5,
+            "stages": [
+                {
+                    "id": 5,
+                    "name": "abc",
+                    "day_start": 0,
+                    "day_end": 7,
+                    "recipes": [
+                        {
+                            "id": 15,
+                            "actuator_type": "light",
+                            "action": "on",
+                            "start_time": "06:00:00",
+                            "end_time": "18:00:00",
+                            "interval_on_min": null,
+                            "interval_off_min": null
+                        }
+                    ]
+                },
+                {
+                    "id": 6,
+                    "name": "regre",
+                    "day_start": 8,
+                    "day_end": 18,
+                    "recipes": [
+                        {
+                            "id": 16,
+                            "actuator_type": "light",
+                            "action": "on",
+                            "start_time": "06:00:00",
+                            "end_time": "18:00:00",
+                            "interval_on_min": null,
+                            "interval_off_min": null
+                        }
+                    ]
+                },
+                {
+                    "id": 7,
+                    "name": "bhbhj",
+                    "day_start": 19,
+                    "day_end": 29,
+                    "recipes": [
+                        {
+                            "id": 17,
+                            "actuator_type": "light",
+                            "action": "on",
+                            "start_time": "06:00:00",
+                            "end_time": "18:00:00",
+                            "interval_on_min": null,
+                            "interval_off_min": null
+                        }
+                    ]
+                }
+            ],
+            "status": "growing"
+        },
+        "irrigation": {
+            "active_count": 0,
+            "running_sessions": []
+        },
+        "system": {
+            "scheduler_state": {
+                "scheduler_running": true,
+                "jobs": [
+                    {
+                        "id": "sensor_collect_job",
+                        "name": "Sensor Collect Job",
+                        "status": "running"
+                    },
+                    {
+                        "id": "batch_stage_update_job",
+                        "name": "Batch Stage Update Job",
+                        "status": "running"
+                    },
+                    {
+                        "id": "transform_job",
+                        "name": "transform_job",
+                        "status": "running"
+                    },
+                    {
+                        "id": "jackpot_draw_job",
+                        "name": "Jackpot Draw Job",
+                        "status": "running"
+                    },
+                    {
+                        "id": "cms_scheduled_publish_job",
+                        "name": "CMS Scheduled Publish Job",
+                        "status": "running"
+                    },
+                    {
+                        "id": "ai_vision_inference_job",
+                        "name": "AI Vision Inference Job",
+                        "status": "running"
+                    }
+                ],
+                "job_count": 6,
+                "running_count": 6,
+                "stopped_count": 0
+            }
+        },
+        "automation": {
+            "rules_result": {
+                "actions": [
+                    {
+                        "actuator_id": 1,
+                        "on": false,
+                        "type": "light_4",
+                        "reason": "sensor_off",
+                        "manual": null,
+                        "scheduled": false,
+                        "has_schedule": false,
+                        "interval_mode": "inactive",
+                        "interval_active": false,
+                        "oneshot": "inactive",
+                        "sensor_triggered": false,
+                        "flow_rate": null,
+                        "flow_blocked": false,
+                        "rain_detected": false,
+                        "rain_intensity": 0.0,
+                        "thresholds_used": {
+                            "moisture_min": 30,
+                            "light_min": 300,
+                            "temperature_max": 28,
+                            "water_level_min": 5,
+                            "water_level_critical": 2,
+                            "ec_min": 1.2,
+                            "ec_max": 2.5,
+                            "ppm_min": 600,
+                            "ppm_max": 1000,
+                            "rain_strong_threshold": 10,
+                            "rain_actuator_actions": {
+                                "pump": "ignore",
+                                "water_pump": "ignore",
+                                "valve": "ignore",
+                                "nutrient_pump": "ignore",
+                                "light": "ignore",
+                                "fan": "ignore"
+                            },
+                            "rain_detected_action": "notify"
+                        }
+                    },
+                    {
+                        "actuator_id": 2,
+                        "on": false,
+                        "type": "light_5",
+                        "reason": "sensor_off",
+                        "manual": null,
+                        "scheduled": false,
+                        "has_schedule": false,
+                        "interval_mode": "inactive",
+                        "interval_active": false,
+                        "oneshot": "inactive",
+                        "sensor_triggered": false,
+                        "flow_rate": null,
+                        "flow_blocked": false,
+                        "rain_detected": false,
+                        "rain_intensity": 0.0,
+                        "thresholds_used": {
+                            "moisture_min": 30,
+                            "light_min": 300,
+                            "temperature_max": 28,
+                            "water_level_min": 5,
+                            "water_level_critical": 2,
+                            "ec_min": 1.2,
+                            "ec_max": 2.5,
+                            "ppm_min": 600,
+                            "ppm_max": 1000,
+                            "rain_strong_threshold": 10,
+                            "rain_actuator_actions": {
+                                "pump": "ignore",
+                                "water_pump": "ignore",
+                                "valve": "ignore",
+                                "nutrient_pump": "ignore",
+                                "light": "ignore",
+                                "fan": "ignore"
+                            },
+                            "rain_detected_action": "notify"
+                        }
+                    },
+                    {
+                        "actuator_id": 3,
+                        "on": false,
+                        "type": "light_6",
+                        "reason": "sensor_off",
+                        "manual": null,
+                        "scheduled": false,
+                        "has_schedule": false,
+                        "interval_mode": "inactive",
+                        "interval_active": false,
+                        "oneshot": "inactive",
+                        "sensor_triggered": false,
+                        "flow_rate": null,
+                        "flow_blocked": false,
+                        "rain_detected": false,
+                        "rain_intensity": 0.0,
+                        "thresholds_used": {
+                            "moisture_min": 30,
+                            "light_min": 300,
+                            "temperature_max": 28,
+                            "water_level_min": 5,
+                            "water_level_critical": 2,
+                            "ec_min": 1.2,
+                            "ec_max": 2.5,
+                            "ppm_min": 600,
+                            "ppm_max": 1000,
+                            "rain_strong_threshold": 10,
+                            "rain_actuator_actions": {
+                                "pump": "ignore",
+                                "water_pump": "ignore",
+                                "valve": "ignore",
+                                "nutrient_pump": "ignore",
+                                "light": "ignore",
+                                "fan": "ignore"
+                            },
+                            "rain_detected_action": "notify"
+                        }
+                    },
+                    {
+                        "actuator_id": 4,
+                        "on": false,
+                        "type": "sliding_door",
+                        "reason": "sensor_off",
+                        "manual": null,
+                        "scheduled": false,
+                        "has_schedule": false,
+                        "interval_mode": "inactive",
+                        "interval_active": false,
+                        "oneshot": "inactive",
+                        "sensor_triggered": false,
+                        "flow_rate": null,
+                        "flow_blocked": false,
+                        "rain_detected": false,
+                        "rain_intensity": 0.0,
+                        "thresholds_used": {
+                            "moisture_min": 30,
+                            "light_min": 300,
+                            "temperature_max": 28,
+                            "water_level_min": 5,
+                            "water_level_critical": 2,
+                            "ec_min": 1.2,
+                            "ec_max": 2.5,
+                            "ppm_min": 600,
+                            "ppm_max": 1000,
+                            "rain_strong_threshold": 10,
+                            "rain_actuator_actions": {
+                                "pump": "ignore",
+                                "water_pump": "ignore",
+                                "valve": "ignore",
+                                "nutrient_pump": "ignore",
+                                "light": "ignore",
+                                "fan": "ignore"
+                            },
+                            "rain_detected_action": "notify"
+                        }
+                    },
+                    {
+                        "actuator_id": 5,
+                        "on": false,
+                        "type": "light_1",
+                        "reason": "sensor_off",
+                        "manual": null,
+                        "scheduled": false,
+                        "has_schedule": false,
+                        "interval_mode": "inactive",
+                        "interval_active": false,
+                        "oneshot": "inactive",
+                        "sensor_triggered": false,
+                        "flow_rate": null,
+                        "flow_blocked": false,
+                        "rain_detected": false,
+                        "rain_intensity": 0.0,
+                        "thresholds_used": {
+                            "moisture_min": 30,
+                            "light_min": 300,
+                            "temperature_max": 28,
+                            "water_level_min": 5,
+                            "water_level_critical": 2,
+                            "ec_min": 1.2,
+                            "ec_max": 2.5,
+                            "ppm_min": 600,
+                            "ppm_max": 1000,
+                            "rain_strong_threshold": 10,
+                            "rain_actuator_actions": {
+                                "pump": "ignore",
+                                "water_pump": "ignore",
+                                "valve": "ignore",
+                                "nutrient_pump": "ignore",
+                                "light": "ignore",
+                                "fan": "ignore"
+                            },
+                            "rain_detected_action": "notify"
+                        }
+                    },
+                    {
+                        "actuator_id": 6,
+                        "on": false,
+                        "type": "light_2",
+                        "reason": "sensor_off",
+                        "manual": null,
+                        "scheduled": false,
+                        "has_schedule": false,
+                        "interval_mode": "inactive",
+                        "interval_active": false,
+                        "oneshot": "inactive",
+                        "sensor_triggered": false,
+                        "flow_rate": null,
+                        "flow_blocked": false,
+                        "rain_detected": false,
+                        "rain_intensity": 0.0,
+                        "thresholds_used": {
+                            "moisture_min": 30,
+                            "light_min": 300,
+                            "temperature_max": 28,
+                            "water_level_min": 5,
+                            "water_level_critical": 2,
+                            "ec_min": 1.2,
+                            "ec_max": 2.5,
+                            "ppm_min": 600,
+                            "ppm_max": 1000,
+                            "rain_strong_threshold": 10,
+                            "rain_actuator_actions": {
+                                "pump": "ignore",
+                                "water_pump": "ignore",
+                                "valve": "ignore",
+                                "nutrient_pump": "ignore",
+                                "light": "ignore",
+                                "fan": "ignore"
+                            },
+                            "rain_detected_action": "notify"
+                        }
+                    },
+                    {
+                        "actuator_id": 7,
+                        "on": true,
+                        "type": "light",
+                        "reason": "schedule",
+                        "manual": null,
+                        "scheduled": true,
+                        "has_schedule": true,
+                        "interval_mode": "inactive",
+                        "interval_active": false,
+                        "oneshot": "inactive",
+                        "sensor_triggered": true,
+                        "flow_rate": null,
+                        "flow_blocked": false,
+                        "rain_detected": false,
+                        "rain_intensity": 0.0,
+                        "thresholds_used": {
+                            "moisture_min": 30,
+                            "light_min": 300,
+                            "temperature_max": 28,
+                            "water_level_min": 5,
+                            "water_level_critical": 2,
+                            "ec_min": 1.2,
+                            "ec_max": 2.5,
+                            "ppm_min": 600,
+                            "ppm_max": 1000,
+                            "rain_strong_threshold": 10,
+                            "rain_actuator_actions": {
+                                "pump": "ignore",
+                                "water_pump": "ignore",
+                                "valve": "ignore",
+                                "nutrient_pump": "ignore",
+                                "light": "ignore",
+                                "fan": "ignore"
+                            },
+                            "rain_detected_action": "notify"
+                        }
+                    }
+                ],
+                "alerts": [
+                    {
+                        "type": "critical",
+                        "message": "Water level critically low!",
+                        "sensor": "water_level",
+                        "value": 0.0,
+                        "action_required": "Immediate water tank refill"
+                    },
+                    {
+                        "type": "warning",
+                        "message": "Cannot irrigate: Both soil moisture and water level are low",
+                        "sensor": "moisture_water_level",
+                        "action_required": "Refill water tank before irrigation"
+                    }
+                ],
+                "water_status": {
+                    "status": "critical",
+                    "message": "CRITICAL: Water level extremely low! Immediate refill required.",
+                    "priority": "high",
+                    "current_level": 0.0,
+                    "min_threshold": 5,
+                    "critical_threshold": 2
+                }
+            },
+            "thresholds": {
+                "moisture_min": 30,
+                "light_min": 300,
+                "temperature_max": 28,
+                "water_level_min": 5,
+                "water_level_critical": 2,
+                "ec_min": 1.2,
+                "ec_max": 2.5,
+                "ppm_min": 600,
+                "ppm_max": 1000,
+                "rain_strong_threshold": 10,
+                "rain_actuator_actions": {
+                    "pump": "ignore",
+                    "water_pump": "ignore",
+                    "valve": "ignore",
+                    "nutrient_pump": "ignore",
+                    "light": "ignore",
+                    "fan": "ignore"
+                },
+                "rain_detected_action": "notify"
+            }
+        }
+    },
+    {
+        "device_id": 2,
+        "device_name": "Nghi Ngo ESP32 Ex",
+        "location": "Hydroponics Lab",
+        "sensors": {
+            "device_id": 2,
+            "device_name": "Nghi Ngo ESP32 Ex",
+            "temperature": 32.0,
+            "humidity": 5.0,
+            "light": 500.0,
+            "moisture": 50.0,
+            "ec": 0.0,
+            "ppm": 0.0,
+            "water_level": 15.0,
+            "rain_detected": false,
+            "rain_intensity": 0.0,
+            "rain_detected_effective": false
+        },
+        "actuators": [
+            {
+                "id": 8,
+                "name": "Pump",
+                "type": "pump",
+                "pin": "25",
+                "port": 1,
+                "is_active": true,
+                "default_state": false,
+                "sensor_key": null,
+                "linked_sensor_value": null,
+                "current_state": false,
+                "last_state_changed_at": null,
+                "manual_state": null,
+                "mode": "auto",
+                "automation_reason": "sensor_off",
+                "interval_mode": "inactive",
+                "oneshot": "inactive",
+                "sensor_triggered": false,
+                "pending_command": null
+            },
+            {
+                "id": 9,
+                "name": "Fan",
+                "type": "fan",
+                "pin": "23",
+                "port": 2,
+                "is_active": true,
+                "default_state": false,
+                "sensor_key": null,
+                "linked_sensor_value": null,
+                "current_state": true,
+                "last_state_changed_at": "2026-10-02T00:35:12.053637",
+                "manual_state": null,
+                "mode": "auto",
+                "automation_reason": "sensor",
+                "interval_mode": "inactive",
+                "oneshot": "inactive",
+                "sensor_triggered": true,
+                "pending_command": null
+            },
+            {
+                "id": 10,
+                "name": "Light",
+                "type": "light",
+                "pin": "27",
+                "port": 3,
+                "is_active": true,
+                "default_state": false,
+                "sensor_key": null,
+                "linked_sensor_value": null,
+                "current_state": false,
+                "last_state_changed_at": "2026-09-29T06:52:17.405587",
+                "manual_state": null,
+                "mode": "auto",
+                "automation_reason": "sensor_off",
+                "interval_mode": "inactive",
+                "oneshot": "inactive",
+                "sensor_triggered": false,
+                "pending_command": null
+            },
+            {
+                "id": 11,
+                "name": "Water Pump",
+                "type": "water_pump",
+                "pin": "16",
+                "port": 4,
+                "is_active": true,
+                "default_state": false,
+                "sensor_key": null,
+                "linked_sensor_value": null,
+                "current_state": false,
+                "last_state_changed_at": null,
+                "manual_state": null,
+                "mode": "auto",
+                "automation_reason": "sensor_off",
+                "interval_mode": "inactive",
+                "oneshot": "inactive",
+                "sensor_triggered": false,
+                "pending_command": null
+            },
+            {
+                "id": 12,
+                "name": "Valve",
+                "type": "valve",
+                "pin": "18",
+                "port": 5,
+                "is_active": true,
+                "default_state": false,
+                "sensor_key": null,
+                "linked_sensor_value": null,
+                "current_state": false,
+                "last_state_changed_at": "2026-10-02T06:35:01.235396",
+                "manual_state": null,
+                "mode": "auto",
+                "automation_reason": "schedule_off",
+                "interval_mode": "inactive",
+                "oneshot": "inactive",
+                "sensor_triggered": false,
+                "pending_command": null
+            }
+        ],
+        "growing_batch": {
+            "id": 2,
+            "plant_name": "Xa lach lolo",
+            "plan_id": 2,
+            "plan_name": "Default Plan",
+            "start_date": "2026-09-29",
+            "days_growing": 3,
+            "current_stage": "Gieo hạt và Ươm cây con",
+            "current_stage_id": 1,
+            "stages": [
+                {
+                    "id": 1,
+                    "name": "Gieo hạt và Ươm cây con",
+                    "day_start": 0,
+                    "day_end": 7,
+                    "recipes": [
+                        {
+                            "id": 9,
+                            "actuator_type": "valve",
+                            "action": "on",
+                            "start_time": "12:30:00",
+                            "end_time": "12:35:00",
+                            "interval_on_min": null,
+                            "interval_off_min": null
+                        }
+                    ]
+                },
+                {
+                    "id": 2,
+                    "name": "Cấy cây con và Phát triển bộ rễ",
+                    "day_start": 8,
+                    "day_end": 18,
+                    "recipes": [
+                        {
+                            "id": 10,
+                            "actuator_type": "valve",
+                            "action": "on",
+                            "start_time": "12:25:00",
+                            "end_time": "12:30:00",
+                            "interval_on_min": null,
+                            "interval_off_min": null
+                        }
+                    ]
+                }
+            ],
+            "status": "growing"
+        },
+        "irrigation": {
+            "active_count": 0,
+            "running_sessions": []
+        },
+        "system": {
+            "scheduler_state": {
+                "scheduler_running": true,
+                "jobs": [
+                    {
+                        "id": "sensor_collect_job",
+                        "name": "Sensor Collect Job",
+                        "status": "running"
+                    },
+                    {
+                        "id": "batch_stage_update_job",
+                        "name": "Batch Stage Update Job",
+                        "status": "running"
+                    },
+                    {
+                        "id": "transform_job",
+                        "name": "transform_job",
+                        "status": "running"
+                    },
+                    {
+                        "id": "jackpot_draw_job",
+                        "name": "Jackpot Draw Job",
+                        "status": "running"
+                    },
+                    {
+                        "id": "cms_scheduled_publish_job",
+                        "name": "CMS Scheduled Publish Job",
+                        "status": "running"
+                    },
+                    {
+                        "id": "ai_vision_inference_job",
+                        "name": "AI Vision Inference Job",
+                        "status": "running"
+                    }
+                ],
+                "job_count": 6,
+                "running_count": 6,
+                "stopped_count": 0
+            }
+        },
+        "automation": {
+            "rules_result": {
+                "actions": [
+                    {
+                        "actuator_id": 8,
+                        "on": false,
+                        "type": "pump",
+                        "reason": "sensor_off",
+                        "manual": null,
+                        "scheduled": false,
+                        "has_schedule": false,
+                        "interval_mode": "inactive",
+                        "interval_active": false,
+                        "oneshot": "inactive",
+                        "sensor_triggered": false,
+                        "flow_rate": null,
+                        "flow_blocked": false,
+                        "rain_detected": false,
+                        "rain_intensity": 0.0,
+                        "thresholds_used": {
+                            "moisture_min": 30,
+                            "light_min": 300,
+                            "temperature_max": 28,
+                            "water_level_min": 5,
+                            "water_level_critical": 2,
+                            "ec_min": 1.2,
+                            "ec_max": 2.5,
+                            "ppm_min": 600,
+                            "ppm_max": 1000,
+                            "rain_strong_threshold": 10.0,
+                            "rain_actuator_actions": {
+                                "pump": "off",
+                                "water_pump": "off",
+                                "valve": "off",
+                                "nutrient_pump": "off",
+                                "light": "ignore",
+                                "fan": "ignore"
+                            }
+                        }
+                    },
+                    {
+                        "actuator_id": 9,
+                        "on": true,
+                        "type": "fan",
+                        "reason": "sensor",
+                        "manual": null,
+                        "scheduled": false,
+                        "has_schedule": false,
+                        "interval_mode": "inactive",
+                        "interval_active": false,
+                        "oneshot": "inactive",
+                        "sensor_triggered": true,
+                        "flow_rate": null,
+                        "flow_blocked": false,
+                        "rain_detected": false,
+                        "rain_intensity": 0.0,
+                        "thresholds_used": {
+                            "moisture_min": 30,
+                            "light_min": 300,
+                            "temperature_max": 28,
+                            "water_level_min": 5,
+                            "water_level_critical": 2,
+                            "ec_min": 1.2,
+                            "ec_max": 2.5,
+                            "ppm_min": 600,
+                            "ppm_max": 1000,
+                            "rain_strong_threshold": 10.0,
+                            "rain_actuator_actions": {
+                                "pump": "off",
+                                "water_pump": "off",
+                                "valve": "off",
+                                "nutrient_pump": "off",
+                                "light": "ignore",
+                                "fan": "ignore"
+                            }
+                        }
+                    },
+                    {
+                        "actuator_id": 10,
+                        "on": false,
+                        "type": "light",
+                        "reason": "sensor_off",
+                        "manual": null,
+                        "scheduled": false,
+                        "has_schedule": false,
+                        "interval_mode": "inactive",
+                        "interval_active": false,
+                        "oneshot": "inactive",
+                        "sensor_triggered": false,
+                        "flow_rate": null,
+                        "flow_blocked": false,
+                        "rain_detected": false,
+                        "rain_intensity": 0.0,
+                        "thresholds_used": {
+                            "moisture_min": 30,
+                            "light_min": 300,
+                            "temperature_max": 28,
+                            "water_level_min": 5,
+                            "water_level_critical": 2,
+                            "ec_min": 1.2,
+                            "ec_max": 2.5,
+                            "ppm_min": 600,
+                            "ppm_max": 1000,
+                            "rain_strong_threshold": 10.0,
+                            "rain_actuator_actions": {
+                                "pump": "off",
+                                "water_pump": "off",
+                                "valve": "off",
+                                "nutrient_pump": "off",
+                                "light": "ignore",
+                                "fan": "ignore"
+                            }
+                        }
+                    },
+                    {
+                        "actuator_id": 11,
+                        "on": false,
+                        "type": "water_pump",
+                        "reason": "sensor_off",
+                        "manual": null,
+                        "scheduled": false,
+                        "has_schedule": false,
+                        "interval_mode": "inactive",
+                        "interval_active": false,
+                        "oneshot": "inactive",
+                        "sensor_triggered": false,
+                        "flow_rate": null,
+                        "flow_blocked": false,
+                        "rain_detected": false,
+                        "rain_intensity": 0.0,
+                        "thresholds_used": {
+                            "moisture_min": 30,
+                            "light_min": 300,
+                            "temperature_max": 28,
+                            "water_level_min": 5,
+                            "water_level_critical": 2,
+                            "ec_min": 1.2,
+                            "ec_max": 2.5,
+                            "ppm_min": 600,
+                            "ppm_max": 1000,
+                            "rain_strong_threshold": 10.0,
+                            "rain_actuator_actions": {
+                                "pump": "off",
+                                "water_pump": "off",
+                                "valve": "off",
+                                "nutrient_pump": "off",
+                                "light": "ignore",
+                                "fan": "ignore"
+                            }
+                        }
+                    },
+                    {
+                        "actuator_id": 12,
+                        "on": false,
+                        "type": "valve",
+                        "reason": "schedule_off",
+                        "manual": null,
+                        "scheduled": false,
+                        "has_schedule": true,
+                        "interval_mode": "inactive",
+                        "interval_active": false,
+                        "oneshot": "inactive",
+                        "sensor_triggered": false,
+                        "flow_rate": null,
+                        "flow_blocked": false,
+                        "rain_detected": false,
+                        "rain_intensity": 0.0,
+                        "thresholds_used": {
+                            "moisture_min": 30,
+                            "light_min": 300,
+                            "temperature_max": 28,
+                            "water_level_min": 5,
+                            "water_level_critical": 2,
+                            "ec_min": 1.2,
+                            "ec_max": 2.5,
+                            "ppm_min": 600,
+                            "ppm_max": 1000,
+                            "rain_strong_threshold": 10.0,
+                            "rain_actuator_actions": {
+                                "pump": "off",
+                                "water_pump": "off",
+                                "valve": "off",
+                                "nutrient_pump": "off",
+                                "light": "ignore",
+                                "fan": "ignore"
+                            }
+                        }
+                    }
+                ],
+                "alerts": [],
+                "water_status": {
+                    "status": "adequate",
+                    "message": "Water level adequate.",
+                    "priority": "low",
+                    "current_level": 15.0,
+                    "min_threshold": 5,
+                    "critical_threshold": 2
+                }
+            },
+            "thresholds": {
+                "moisture_min": 30,
+                "light_min": 300,
+                "temperature_max": 28,
+                "water_level_min": 5,
+                "water_level_critical": 2,
+                "ec_min": 1.2,
+                "ec_max": 2.5,
+                "ppm_min": 600,
+                "ppm_max": 1000,
+                "rain_strong_threshold": 10.0,
+                "rain_actuator_actions": {
+                    "pump": "off",
+                    "water_pump": "off",
+                    "valve": "off",
+                    "nutrient_pump": "off",
+                    "light": "ignore",
+                    "fan": "ignore"
+                }
+            }
+        }
+    }
+]

@@ -399,3 +399,92 @@ risking hardware.
   controller in the building — only `secrets.py`'s credentials and
   `config.py`'s `DEVICE_LOCATION` (and `GPIO_EXPANDERS`/pin map, if a
   particular board has different hardware) differ per unit.
+
+# Patches needed alongside scheduler.py / main.py
+
+## 1. wifi.py — add a non-blocking connect (put inside `WiFiManager`)
+
+```python
+    async def connect_async(self):
+        """Like connect(), but yields to uasyncio instead of time.sleep()."""
+        import uasyncio as asyncio
+        if self.is_connected():
+            return True
+        try:
+            self._wlan.disconnect()          # cancel any half-finished attempt
+        except OSError:
+            pass
+        try:
+            self._wlan.connect(config.SSID, config.PASSWORD)
+        except OSError as e:
+            print("[wifi] connect() raised %s, resetting interface" % e)
+            self._wlan.active(False)
+            await asyncio.sleep_ms(300)
+            self._wlan.active(True)
+            await asyncio.sleep_ms(300)
+            try:
+                self._wlan.connect(config.SSID, config.PASSWORD)
+            except OSError as e2:
+                print("[wifi] connect() still failing:", e2)
+                return False
+
+        start = time.ticks_ms()
+        while not self._wlan.isconnected():
+            if time.ticks_diff(time.ticks_ms(), start) > CONNECT_TIMEOUT_S * 1000:
+                print("[wifi] connect timed out")
+                return False
+            await asyncio.sleep_ms(500)
+        print("[wifi] connected, ip =", self._wlan.ifconfig()[0])
+        return True
+```
+
+## 2. control.py — two small edits
+
+In `ControlLoop.__init__` add:
+
+```python
+        self.on_status = None   # set by main.py -> scheduler.on_status
+```
+
+In `poll_status()`, right after `my_entry` is found and before `return self._extract_commands(...)`:
+
+```python
+            if self.on_status:
+                self.on_status(my_entry)   # marks backend OK (schedule now comes from /hydro/config)
+```
+
+Optional: lower `HTTP_TIMEOUT_S` to 4 so a trial poll against a half-dead
+backend blocks the event loop for less time.
+
+## 3. config.py — optional additions (all have defaults)
+
+```python
+TZ_OFFSET_S = 7 * 3600        # recipe times are local wall-clock (Vietnam, UTC+7)
+OFFLINE_AFTER_S = 30          # no good /hydro/status for this long -> offline mode
+SCHEDULE_FILE = "schedule.json"
+CONFIG_URL = FASTAPI_URL + "/hydro/config"   # GET ?device_id=<DEVICE_CODE>
+SCHEDULE_SYNC_S = 60          # how often to refresh the cached schedule when online
+WDT_TIMEOUT_MS = None         # e.g. 30000 in production; None while developing
+```
+
+## 4. README.md — merge these changes
+
+- **Folder Structure**: add `scheduler.py` — "Fetches each actuator's schedules
+  from `GET /hydro/config`, caches them in flash (`schedule.json`) and executes
+  them locally whenever the backend/WiFi is unreachable. Also owns async WiFi
+  reconnect, backend probe and NTP sync." Note `main.py` is now a `uasyncio` app.
+- **Safety Design**: add — "Offline mode never touches the sliding door. If the
+  safety sweep force-offs a channel, the scheduler won't re-energize it until its
+  window ends. The scheduler only runs with a valid (NTP-synced) clock."
+- **Backend API Contract**: add
+  `GET /hydro/config?device_id=<DEVICE_CODE>` -> `{ actuators: [{ id, type, pin,
+  port, schedules: [{start "HH:MM", end, days "mon,tue,...", on_min, off_min}] }] }`.
+  Rows are matched to local channels by `pin`/`port` (never `type`/`name`);
+  non-matching rows are skipped with a log line. Polled every `SCHEDULE_SYNC_S`
+  while the backend is reachable.
+- **Operating the Device**: add "Offline mode" — after `OFFLINE_AFTER_S` without
+  a good `/hydro/status` poll, cached schedules drive any channel that has one;
+  backend manual overrides are ignored until it reconnects.
+- **Troubleshooting**: `[sched] clock not set yet` = no NTP since boot (check
+  WiFi/DNS, or fit a DS3231 RTC); `[sched] backend actuator ... not on this
+  board` = row's pin/port doesn't match `TYPE_TO_GPIO`.

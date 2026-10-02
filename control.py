@@ -83,6 +83,8 @@ class ControlLoop:
         self._last_status_poll = 0
         self._last_sensor_push = 0
 
+        self.on_status = None   # set by main.py -> scheduler.on_status
+
     # ---------------------------------------------------------
     # Commands: GET /hydro/status
     # ---------------------------------------------------------
@@ -124,6 +126,12 @@ class ControlLoop:
             my_entry = self._find_my_entry(entries)
             if my_entry is None:
                 return []
+
+            if self.on_status:
+                try:
+                    self.on_status(my_entry)
+                except Exception as e:
+                    print("[control] on_status failed:", e)
 
             return self._extract_commands(my_entry.get("actuators", []))
 

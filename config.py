@@ -88,6 +88,14 @@ ACTUATOR_BULK_URL = ACTUATOR_URL + "/bulk"
 STATUS_URL = FASTAPI_URL + "/hydro/status"
 # ↔ GET → ESP32 fetch commands from backend
 
+# Device config + per-actuator schedules (small payload, scoped to this device)
+CONFIG_URL = FASTAPI_URL + "/hydro/config"
+# ↔ GET ?device_id=<DEVICE_CODE> → thresholds + actuators[].schedules
+#   [{start "HH:MM", end, days "mon,tue,...", on_min, off_min}]
+#   scheduler.py caches this in flash (SCHEDULE_FILE) and runs it offline.
+#   Rows are matched to local channels by pin/port, NOT by type/name.
+#   device_id is the STRING DEVICE_CODE (same as POST /hydro/devices).
+
 FLOW_URL = FASTAPI_URL + "/hydro/flow-readings"
 
 
@@ -225,11 +233,17 @@ ACTUATOR_STATES = {
 # GPIO HIGH -> relay OFF
 RELAY_ACTIVE_LOW = True
 
-
 # ================================
 # ⏱ TIMING CONFIG
 # ================================
 SEND_INTERVAL = 10  # seconds (send sensor data)
 RETRY_DELAY = 5     # seconds (retry when failed)
 
-
+# ================================
+# 🗓 OFFLINE SCHEDULER (scheduler.py)
+# ================================
+SCHEDULE_FILE = "schedule.json"   # compact schedule cache in flash
+SCHEDULE_SYNC_S = 60              # refresh cache this often while backend is reachable
+OFFLINE_AFTER_S = 30              # no good /hydro/status for this long → offline mode
+TZ_OFFSET_S = 7 * 3600            # schedule times are local wall-clock (Vietnam, UTC+7)
+WDT_TIMEOUT_MS = None             # e.g. 30000 in production; None while developing
