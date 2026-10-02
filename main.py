@@ -1,23 +1,22 @@
 """
 main.py
 -------
-Entry point. Responsibilities ONLY:
-  1. Bring up WiFi.
-  2. Build the actuator layer (relay/mosfet channels from
-     config.TYPE_TO_GPIO).
-  3. Log in and register the device + actuators with the FastAPI
-     hydro backend.
-  4. Run the main loop: keep WiFi alive, poll/execute commands, push
-     sensor data + actuator state, run the relay safety sweep, and
-     refresh the OLED.
-
-All actual logic lives in the other modules - this file is just the
-coordinator, so it stays readable as the project grows.
+Entry point (uasyncio version). Responsibilities ONLY:
+  1. Build hardware layers (actuators start OFF) + load cached schedule.
+  2. Start the async tasks:
+       - scheduler.run        : executes the cached schedule when offline
+       - scheduler.wifi_task  : non-blocking WiFi reconnect w/ backoff
+       - scheduler.probe_task : non-blocking "is the backend reachable?"
+       - scheduler.ntp_task   : clock sync (needed for the schedule)
+       - io_loop              : backend polling (only when reachable),
+                                relay safety sweep, OLED
+  3. Any unhandled error forces actuators off (same policy as before).
 """
 
 import time
 import gc
 import machine
+import uasyncio as asyncio
 
 import config
 import auth
@@ -26,10 +25,12 @@ from actuators import ActuatorManager
 from device import Device
 from control import ControlLoop
 from oled_display import OledDisplay
+from scheduler import Scheduler
 import flow_sensor
 
 DEVICE_LABEL = getattr(config, "DEVICE_MODEL", "esp32-hydro-controller")
 FIRMWARE_VERSION = getattr(config, "FIRMWARE_VERSION", "unknown")
+WDT_TIMEOUT_MS = getattr(config, "WDT_TIMEOUT_MS", None)   # None = disabled (dev)
 
 
 def boot():
@@ -38,105 +39,115 @@ def boot():
     print("Device code:", config.DEVICE_CODE)
     print("=" * 40)
 
+    gc.collect()
+    gc.threshold(gc.mem_free() // 4 + gc.mem_alloc())   # collect before heap fragments
+
     oled = OledDisplay()
-    oled.show_message("Booting...", "connecting wifi")
+    oled.show_message("Booting...", "offline-capable")
 
     wifi = WiFiManager()
-    actuators = ActuatorManager()  # also forces all relays/mosfets OFF at init (safe state)
-    # Flow sensor pulse-counting is local-hardware-only (no WiFi/backend
-    # dependency), but a bad config.FLOW_SENSOR_PINS entry shouldn't be
-    # able to abort the whole boot - degrade to "no flow sensing" instead,
-    # same philosophy as the fatal-error handler in run() below.
+    actuators = ActuatorManager()          # forces all relays/mosfets OFF (safe state)
     try:
         flow_sensor.init()
     except Exception as e:
         print("[main] flow_sensor init failed, continuing without flow sensing:", e)
-        
+
     device = Device(actuators)
     control = ControlLoop(device, actuators)
-
-    wifi.connect()
-    if wifi.is_connected():
-        oled.show_message("WiFi OK", wifi.ip())
-        auth.login()
-        device.register(wifi.ip())
-    else:
-        oled.show_message("WiFi FAILED", "retrying in loop")
-
-    return wifi, actuators, device, control, oled
+    sched = Scheduler(actuators)           # loads schedule.json from flash
+    control.on_status = sched.on_status    # cache schedule on every good poll
+    return wifi, actuators, device, control, oled, sched
 
 
-def main_loop(wifi, actuators, device, control, oled):
-    last_display_refresh = 0
-    display_refresh_interval = 2  # seconds
+async def io_loop(wifi, actuators, device, control, oled, sched):
+    last_display = time.ticks_ms()
+    last_reg_try = time.ticks_add(time.ticks_ms(), -60000)
+    was_connected = False
+    need_register = True
 
     while True:
         try:
-            # 1. Keep the network alive; re-login + re-register if we
-            #    just recovered (a fresh connection likely means a
-            #    fresh boot's-worth of state was lost, so don't trust
-            #    a stale token/registration).
-            was_connected = wifi.is_connected()
-            wifi.ensure_connected()
-            if wifi.is_connected() and not was_connected:
-                print("[main] wifi recovered, re-authenticating + re-registering")
-                auth.login()
-                device.register(wifi.ip())
+            connected = wifi.is_connected()
+            if connected and not was_connected:
+                need_register = True       # fresh link: re-auth + re-register
+            was_connected = connected
 
-            # 2. Talk to the backend (poll/execute commands, push
-            #    sensor data + actuator state).
-            if wifi.is_connected():
-                control.tick()
+            # Backend work happens ONLY if the async probe says it's
+            # reachable, so blocking urequests calls are rare + short
+            # while the backend is down.
+            if connected and sched.reachable:
+                if need_register or not device.registered:
+                    if time.ticks_diff(time.ticks_ms(), last_reg_try) > config.SEND_INTERVAL * 1000:
+                        last_reg_try = time.ticks_ms()
+                        auth.login()
+                        device.register(wifi.ip())
+                        need_register = not device.registered
+                if not need_register:
+                    control.tick()
 
-            # 3. Local maintenance: relay/mosfet safety sweep (force-off
-            #    anything that's exceeded its max on-time).
-            actuators.tick()
+            tripped = actuators.tick()     # safety sweep + door pulses
+            if tripped:
+                sched.latch(tripped)       # don't instantly re-energize
 
-            # 4. Optional local automation - only runs while
-            #    config.AUTO_MODE["enabled"] is True, and control.py
-            #    already stops pulling backend commands in that mode
-            #    so the two never fight over an actuator.
-            if config.AUTO_MODE["enabled"]:
-                # Local automation rules would go here, e.g. reading
-                # sensors.read_all() and driving actuators directly.
-                pass
-
-            # 5. Refresh local display.
-            now = time.time()
-            if now - last_display_refresh >= display_refresh_interval:
-                last_display_refresh = now
+            if time.ticks_diff(time.ticks_ms(), last_display) >= 2000:
+                last_display = time.ticks_ms()
                 oled.show_status(
-                    wifi_connected=wifi.is_connected(),
+                    wifi_connected=connected,
                     ip_address=wifi.ip(),
                     registered=device.registered,
                     actuator_state=actuators.state_snapshot(),
                 )
 
-            time.sleep(0.2)
             gc.collect()
+            await asyncio.sleep_ms(200)
 
+        except asyncio.CancelledError:
+            raise
         except Exception as e:
-            # Never let an unhandled exception kill the control loop of
-            # a device driving pumps/valves/lights - log it, force
-            # actuators to a safe state, and keep going.
             print("[main] loop error:", e)
             try:
                 actuators.all_off()
             except Exception:
                 pass
-            time.sleep(1)
+            await asyncio.sleep(1)
+
+
+async def supervise(name, make_coro, actuators):
+    """Restart a task if it crashes, forcing actuators to a safe state first."""
+    while True:
+        try:
+            await make_coro()
+        except asyncio.CancelledError:
+            raise
+        except Exception as e:
+            print("[main] task '%s' crashed: %s" % (name, e))
+            try:
+                actuators.all_off()
+            except Exception:
+                pass
+            await asyncio.sleep(1)
+
+
+async def main_async(wifi, actuators, device, control, oled, sched):
+    wdt = machine.WDT(timeout=WDT_TIMEOUT_MS) if WDT_TIMEOUT_MS else None
+    tasks = [
+        asyncio.create_task(supervise("scheduler", lambda: sched.run(wdt), actuators)),
+        asyncio.create_task(supervise("wifi", lambda: sched.wifi_task(wifi), actuators)),
+        asyncio.create_task(supervise("probe", lambda: sched.probe_task(wifi), actuators)),
+        asyncio.create_task(supervise("ntp", lambda: sched.ntp_task(wifi), actuators)),
+        asyncio.create_task(supervise("io", lambda: io_loop(wifi, actuators, device, control, oled, sched), actuators)),
+    ]
+    await asyncio.gather(*tasks)
 
 
 def run():
-    wifi, actuators, device, control, oled = boot()
+    wifi, actuators, device, control, oled, sched = boot()
     try:
-        main_loop(wifi, actuators, device, control, oled)
+        asyncio.run(main_async(wifi, actuators, device, control, oled, sched))
     except KeyboardInterrupt:
         print("[main] stopped by user, switching all actuators off")
         actuators.all_off()
     except Exception as e:
-        # Last-resort safety net: force everything off and reboot the
-        # board rather than leaving it in an unknown state.
         print("[main] fatal error, forcing safe state and resetting:", e)
         try:
             actuators.all_off()
