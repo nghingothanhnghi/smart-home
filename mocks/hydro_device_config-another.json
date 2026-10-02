@@ -1,0 +1,82 @@
+{
+    "id": 3,
+    "device_id": "esp32-b0cbd8e2d45c",
+    "active": true,
+    "thresholds": {
+        "moisture_min": 30,
+        "light_min": 300,
+        "temperature_max": 28,
+        "water_level_min": 5,
+        "water_level_critical": 2,
+        "ec_min": 1.2,
+        "ec_max": 2.5,
+        "ppm_min": 600,
+        "ppm_max": 1000,
+        "rain_strong_threshold": 10.0
+    },
+    "actuators": [
+        {
+            "id": 13,
+            "type": "light_4",
+            "pin": "26",
+            "port": 26,
+            "state": false,
+            "manual": null,
+            "schedules": []
+        },
+        {
+            "id": 14,
+            "type": "light_5",
+            "pin": "25",
+            "port": 25,
+            "state": false,
+            "manual": null,
+            "schedules": []
+        },
+        {
+            "id": 15,
+            "type": "light_6",
+            "pin": "33",
+            "port": 33,
+            "state": false,
+            "manual": null,
+            "schedules": []
+        },
+        {
+            "id": 16,
+            "type": "sliding_door",
+            "pin": "32,23",
+            "port": 32,
+            "state": false,
+            "manual": null,
+            "schedules": []
+        },
+        {
+            "id": 17,
+            "type": "light_1",
+            "pin": "13",
+            "port": 13,
+            "state": false,
+            "manual": null,
+            "schedules": []
+        },
+        {
+            "id": 18,
+            "type": "light_2",
+            "pin": "14",
+            "port": 14,
+            "state": false,
+            "manual": null,
+            "schedules": []
+        },
+        {
+            "id": 19,
+            "type": "light_3",
+            "pin": "27",
+            "port": 27,
+            "state": true,
+            "manual": true,
+            "schedules": []
+        }
+    ]
+}
