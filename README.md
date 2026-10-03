@@ -44,10 +44,18 @@ relay modules), coordinated by an existing FastAPI "hydro" backend.
   (`light_1`...`light_6`, `sliding_door`), builds the backend
   registration payload, and executes commands coming back from the
   backend.
-- **`control.py`**: Polls `GET /hydro/status` (scoped to this device via
-  `?device_id=<numeric_id>`) for desired actuator state, executes it,
-  and pushes sensor telemetry to `POST /sensor/data`. Polling doubles
-  as the heartbeat — there's no separate heartbeat endpoint.
+- **`control.py`**: Polls `GET /hydro/status?device_id=<numeric_id>` (scoped to
+  this device, otherwise the response is too large for the ESP32 heap) and
+  executes the desired actuator state. Pushes sensor telemetry to
+  `POST /sensor/data` and flow readings to `POST /hydro/flow-readings`.
+  Polling doubles as the heartbeat. Backs off on repeated 401s.
+- **`scheduler.py`**: Fetches each actuator's schedules from
+  `GET /hydro/config`, caches them in flash (`schedule.json`), and runs them
+  locally when the backend or WiFi is unreachable. Also owns async WiFi
+  reconnect, the backend reachability probe and NTP sync. `main.py` is now a
+  `uasyncio` app.
+- **`flow_sensor.py`**: Pulse-counting flow sensors (YF-S201 style) on native
+  GPIOs, reported per pump.
 - **`sensors.py`**: Optional DHT11 / analog EC-PPM readers, feeding
   `control.py`'s sensor push. Disabled by default
   (`config.ENABLE_SENSORS` not set → falls back to `False`) — kept so
@@ -182,6 +190,13 @@ on the mains side per the **Hardware / Wiring** warning above.
 - Any unhandled exception in the main loop forces all relays off
   (`actuators.all_off()`) and continues; a fatal error at the top level
   forces all relays off and resets the board (see `main.py`).
+- Offline mode never touches the sliding door. If the safety sweep force-offs a
+  channel, the scheduler won't re-energize it until its schedule window ends.
+  The scheduler only runs with a valid (NTP-synced) clock.
+- Backend rows with `is_active: false` are forced OFF. A channel whose row
+  disappears from `/hydro/status` is forced OFF on the next poll. The sliding
+  door is exempt from both rules (only `stop` and `DOOR_MAX_RUN_S` act on it).
+
 
 ## Backend API Contract (FastAPI "hydro" backend)
 
@@ -236,29 +251,23 @@ POST /actuators/bulk
     the door) so the physical wiring stays recoverable from the row.
 
 GET  /hydro/status?device_id={numeric_id}
-  response: [ { device_id (numeric), device_name, location, sensors,
-      actuators: [
-        { id, name, type, pin, port, current_state, manual_state,
-          mode, pending_command, ... }
-      ], growing_batch, system, automation
-  }, ... ]
-  → polled every config.SEND_INTERVAL (10s), scoped to this device via
-    the query param; doubles as the heartbeat (no separate heartbeat
-    endpoint). Desired state per actuator is manual_state if not null
-    (a dashboard/app override), else current_state (the backend's own
-    automation decision). A pending_command of "stop" is fire-once —
-    cleared server-side the instant this GET reads it, so a missed
-    poll means a missed stop.
-  → ⚠️ 'type' is a generic hardware category, confirmed live to be
-    "light" for every one of the 6 lights (not light_1..light_6) — the
-    sliding door's type happens to be unique but that's incidental.
-    'name' is also unreliable: it's user-editable from the dashboard
-    (e.g. "Light 1" can be renamed "Đèn (Garage xe)" without changing
-    which GPIO it drives). The reliable fields are 'pin' and 'port',
-    which `actuators.py` matches back to a `config.TYPE_TO_GPIO`
-    descriptor (or its `gpio_manager.registration_port()`) — not by
-    type or name. A row that matches neither is skipped rather than
-    guessed at.
+  → REQUIRED scope. Unscoped, the backend returns every device with full
+    automation blocks (~40 KB) and the ESP32 runs out of memory parsing it.
+    Polled every config.SEND_INTERVAL (10s). Desired state = manual_state if
+    not null, else current_state. is_active=false forces OFF.
+    pending_command "stop" is fire-once. Rows are matched to local channels
+    by `pin` only (never type/name). A non-matching row is skipped and logged.
+  → If still too large, set config.STATUS_QUERY_EXTRA (e.g. "&compact=1")
+    once the backend offers a slim variant.
+
+GET  /hydro/config?device_id=<DEVICE_CODE>
+  → { actuators: [{ id, type, pin, port, schedules: [{start "HH:MM", end,
+    days "mon,tue,...", on_min, off_min}] }] }
+    Polled every SCHEDULE_SYNC_S while the backend is reachable. Rows are
+    matched by pin/port.
+
+POST /hydro/flow-readings
+  body: { actuator_id (numeric backend id), flow_rate (L/min) }
 
 POST /sensor/data
   body (SensorDataCreateSchema): {
@@ -318,12 +327,10 @@ Valid `actuator_id` / desired-state pairs the firmware understands:
 
 ### Security note
 
-`SSID` / `PASSWORD` (WiFi) are currently hardcoded directly in
-`config.py`, which **is** tracked by git — only `secrets.py` is
-gitignored. If this repo is shared or pushed anywhere, either move the
-WiFi credentials into `secrets.py` alongside `AUTH_USERNAME` /
-`AUTH_PASSWORD`, or make sure `config.py` itself is kept private for
-your deployment.
+`SSID` / `PASSWORD` (WiFi) are currently in
+`secrets.py`, which **is** tracked by git — only `secrets.py` is
+gitignored. '. config.py now imports from secrets.py WIFI_SSID, WIFI_PASSWORD, AUTH_USERNAME, AUTH_PASSWORD
+
 
 ## Operating the Device
 
@@ -376,6 +383,12 @@ risking hardware.
 | OLED stays blank | Non-fatal — check serial log for `[oled] display not available, continuing without it: ...` and verify I2C wiring/address. |
 | `gpio_manager: no config.GPIO_EXPANDERS entry for unit ...` | A `TYPE_TO_GPIO`/`DOOR_OPEN_PIN`/`DOOR_CLOSE_PIN` value uses `"mcp:<unit>:..."` but that unit id isn't in `config.GPIO_EXPANDERS` — add it or fix the typo. |
 | `gpio_manager: pin ... is on a GPIO expander, which has no PWM peripheral` | A `TYPE_TO_HARDWARE = "mosfet"` entry points at an `"mcp:..."` descriptor — expander pins are digital-only; move that channel to a native GPIO. |
+[control] poll_status out of memory	Response too large. Confirm the poll is scoped (?device_id=). Otherwise use STATUS_QUERY_EXTRA with a slim backend mode.
+[control] auth rejected, backing off Ns	Login/credentials failing. Check secrets.py and that the backend user exists.
+[control] unresolved status row id=… pin=…	The row's pin isn't in TYPE_TO_GPIO. Check GET /actuators/device/{id}.
+[sched] mode -> OFFLINE while backend is up	No good status poll within OFFLINE_AFTER_S. See the poll errors above it.
+[sched] clock not set yet	No NTP sync since boot. Check WiFi/DNS or fit a DS3231 RTC.
+[sched] backend actuator … not on this board	Row's pin/port doesn't match TYPE_TO_GPIO.
 
 ## Scaling This Project
 
@@ -399,8 +412,6 @@ risking hardware.
   controller in the building — only `secrets.py`'s credentials and
   `config.py`'s `DEVICE_LOCATION` (and `GPIO_EXPANDERS`/pin map, if a
   particular board has different hardware) differ per unit.
-
-# Patches needed alongside scheduler.py / main.py
 
 ## 1. wifi.py — add a non-blocking connect (put inside `WiFiManager`)
 
@@ -485,6 +496,14 @@ WDT_TIMEOUT_MS = None         # e.g. 30000 in production; None while developing
 - **Operating the Device**: add "Offline mode" — after `OFFLINE_AFTER_S` without
   a good `/hydro/status` poll, cached schedules drive any channel that has one;
   backend manual overrides are ignored until it reconnects.
+  - **Offline mode**: after `OFFLINE_AFTER_S` (30s) without a good
+  `/hydro/status` poll, cached schedules drive any channel that has one.
+  Backend manual overrides are ignored until it reconnects.
+- **401 handling**: one automatic re-login. If that fails, status polls and
+  telemetry back off 30s, doubling up to 10 min.
+- **Silent no-ops**: `[control] executed ...` only prints when a state
+  actually changes. No log line for an unchanged channel is normal.
 - **Troubleshooting**: `[sched] clock not set yet` = no NTP since boot (check
   WiFi/DNS, or fit a DS3231 RTC); `[sched] backend actuator ... not on this
   board` = row's pin/port doesn't match `TYPE_TO_GPIO`.
+
