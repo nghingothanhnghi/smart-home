@@ -66,14 +66,12 @@ class ActuatorManager:
             else:
                 pin_map[str(gpio_manager.registration_port(pin_no))] = actuator_type
         return pin_map
-
+    
     def resolve_actuator_type(self, item):
-        """actuator_type for a /hydro/status row, resolved by pin/port."""
-        for key in ("pin", "port"):
-            val = item.get(key)
-            if val is not None and str(val) in self._pin_to_type:
-                return self._pin_to_type[str(val)]
-        return None        
+       val = item.get("pin")
+       if val is not None and str(val) in self._pin_to_type:
+           return self._pin_to_type[str(val)]
+       return None
 
     # ---------------------------------------------------------
     # Registration payload (sent to POST /actuators/bulk)
