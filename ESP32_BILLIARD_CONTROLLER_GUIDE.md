@@ -13,12 +13,14 @@ is now available in `billiard_config.py`, `billiard_storage.py`,
 
 Before flashing it:
 
-1. Add `BILLIARD_DEVICE_ID` and `BILLIARD_DEVICE_KEY` to the untracked `secrets.py`.
+1. Add `WIFI_SSID`, `WIFI_PASSWORD`, `BILLIARD_DEVICE_ID` and `BILLIARD_DEVICE_KEY` to the untracked `secrets.py`.
 2. Set `FASTAPI_URL` and provision the real `TABLE_MAP` in `billiard_config.py`.
-3. Implement the RS485/display adapter so it calls `BilliardController` methods
-   (`start_session`, `start_game`, `change_score`, `stop_session`).
-4. Use `billiard_main.py` as the entry point for a dedicated billiard ESP32;
-   do not replace the hydro board's `main.py`.
+3. Implement the RS485/display adapter as `billiard_adapter.py` with `async def run(controller)`;
+   it calls `BilliardController` methods (`start_session`, `start_game`, `change_score`,
+   `new_game`, `game_end`, `score_reset`, `stop_session`) and is started by `billiard_main.py`.
+4. Copy `main_billiard.py` to the billiard board **as `main.py`** (MicroPython only auto-runs
+   `main.py`); do not replace the hydro board's `main.py`.
+```
 
 The queue writes its sequence counter before appending an event, retains events
 until the server's contiguous acknowledgement cursor advances, and records
@@ -70,10 +72,11 @@ Response (`201`) includes **`api_key` exactly once**. Only its SHA-256 hash is s
 Flash into the ESP32 `secrets.py` (not `config.py`):
 
 ```python
-DEVICE_ID = "BILLIARD-CONTROLLER-01"
-DEVICE_KEY = "<api_key>"
-API_BASE = "https://<your-api>"
+BILLIARD_DEVICE_ID = "BILLIARD-CONTROLLER-01"
+BILLIARD_DEVICE_KEY = "<api_key>"
 ```
+
+and put `API_BASE` → `FASTAPI_URL = "https://<your-api>"` in `billiard_config.py`, not in `secrets.py`.
 
 The device belongs to the registering user's `client_id`. The controller only ever sees tables of that club. A lost key means registering a new device (there is no rotate endpoint yet).
 
@@ -104,7 +107,12 @@ Content-Type: application/json
 | `403` | `/sync` body `device_id` does not match the header device |
 | `422` | Body failed validation (e.g. `device_seq < 1`, batch > 500 events) |
 
-Any authenticated call sets `last_seen` and `status=online`. The backend reports the device `offline` after **90 s** without a request (`OFFLINE_AFTER`), so send a heartbeat at least every 30-60 s.
+```markdown
+Any authenticated call sets `last_seen` and `status=online`. The backend reports the device
+`offline` after **90 s** without a request. A cheap `GET /state` every 45 s is sufficient
+and needs no `device_seq`; reserve `heartbeat` events (which consume a seq and a flash write)
+for diagnostics, e.g. on connect and hourly.
+```
 
 ---
 
@@ -266,6 +274,13 @@ def sync():
 Important: `server_state_version` stops at the first non-processed seq. Events after a rejected one are applied but stay un-acked, and will be resent as `duplicates` (harmless). To avoid an ever-growing queue, **move a rejected/conflict event to the local error log and mark it "resolved locally"; if it is permanently invalid, ask a manager to fix the data and resend**. A rejected event keeps its `event_id`, so retrying the same event after the server state is fixed (e.g. session started in POS) is the supported recovery path.
 
 Retry/backoff: 2 s, 4 s, 8 s … capped at 60 s. A network error is not a rejection; keep the queue untouched.
+
+```markdown
+Flush the queued backlog **before** reconciling with `GET /state`, and only adopt server
+state for tables that have no un-acked local events. Otherwise a session stopped offline
+is re-adopted from stale server state. Use batches of ~20 events on the device; 500 is the
+server limit, not an ESP32-safe size.
+```
 
 ### 7.4 Live (online) mode
 After each button action: update local display immediately, `enqueue`, then `POST /events`. If it fails, the event stays in the queue (same code path as offline).
