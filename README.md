@@ -36,8 +36,8 @@ unreachable.
   JWT. Re-logs-in transparently on any `401`.
 - **`device.py`**: Registers the device and its actuator list with the
   backend, resolves the backend's numeric device PK and each actuator's
-  numeric id (used to tag flow readings), and syncs `DEVICE_LOCATION` once
-  per boot.
+  numeric id (used to tag flow readings and reported-state acks), and syncs
+  `DEVICE_LOCATION` once per boot.
 - **`wifi.py`**: WiFi connect (blocking and async) and reconnect with backoff.
 - **`scheduler.py`**: Fetches each actuator's schedules from
   `GET /hydro/config`, caches them in flash (`schedule.json`), and runs them
@@ -59,9 +59,10 @@ unreachable.
   (`light_1`...`light_6`, `sliding_door`), builds the backend registration
   payload, resolves backend rows to local channels by pin/port, and executes
   commands.
-- **`control.py`**: Polls `GET /hydro/status?device_id=<numeric_id>` (scoped
-  to this device, otherwise the response is too large for the ESP32 heap) and
-  executes the desired actuator state. Pushes sensor telemetry to
+- **`control.py`**: Polls `GET /hydro/status?device_id=<numeric_id>` (scoped to
+  this device, otherwise the response is too large for the ESP32 heap) and
+  executes the desired actuator state. Acknowledges the *real* channel state
+  to `POST /hydro/actuator/{id}/reported-state`. Pushes sensor telemetry to
   `POST /sensor/data` and flow readings to `POST /hydro/flow-readings`.
   Polling doubles as the heartbeat. Backs off on repeated 401s.
 - **`sensors.py`**: Optional DHT11 (temperature/humidity), analog EC/PPM
@@ -213,6 +214,8 @@ on the mains side.
   disappears from `/hydro/status` is forced OFF on the next poll. The sliding
   door is exempt from both rules (only `stop` and `DOOR_MAX_RUN_S` act on
   it).
+- Reported-state acks only *report* what a channel is doing; they never
+  change it. A lost or rejected ack can't energize anything.
 - `WDT_TIMEOUT_MS` in `config.py` enables the hardware watchdog (fed by
   `scheduler.run`). It is `None` (disabled) during development; set it (e.g.
   `30000`) in production.
@@ -235,6 +238,9 @@ on the mains side.
 - **Offline**: the scheduler drives every channel that has a cached
   schedule. Channels without a schedule are left alone (the 12h safety sweep
   still applies). Manual overrides can't arrive while offline.
+- Reported-state acks can't be sent while offline. On reconnect, the next
+  status interval acks every channel whose real state changed in the
+  meantime (including schedule-driven changes).
 - Needs a valid clock: no schedule is executed until NTP has synced since
   boot.
 
@@ -272,7 +278,7 @@ PUT  /hydro/devices/{numeric_id}
 GET  /actuators/device/{numeric_id}
   → checked before bulk-registering actuators (so a reboot never re-creates
     duplicate rows), and re-fetched afterwards to resolve each actuator's
-    numeric id for flow readings.
+    numeric id for flow readings and reported-state acks.
 
 POST /actuators/bulk
   body (list of HydroActuatorCreate): [
@@ -304,6 +310,22 @@ GET  /hydro/config?device_id=<DEVICE_CODE>
     days "mon,tue,...", on_min, off_min}] }] }
     Polled every SCHEDULE_SYNC_S while the backend is reachable.
 
+POST /hydro/actuator/{actuator_id}/reported-state
+  auth: Bearer JWT
+  path: actuator_id = the backend's NUMERIC actuator id
+        (Device.actuator_ids_by_type, resolved after registration)
+  body: { device_id (NUMERIC device PK), reported_state (bool),
+          error (str|null, max 500) }
+  → Does NOT change the desired state; it only fills reported_state* so the
+    dashboard can show desired vs actual.
+  → 400 "Actuator does not belong to device" if device_id doesn't match.
+  → Sent on boot/registration (all channels), whenever a channel's real state
+    differs from the last state the backend accepted (backend command,
+    safety-sweep trip, offline scheduler, reconnect catch-up), and with
+    `error` set when a command could not be applied.
+  → reported_state for the sliding door: true = open/up, false = closed/down.
+    A `stop` doesn't change it (stop keeps the stored direction).
+
 POST /hydro/flow-readings
   body: { actuator_id (numeric backend id), flow_rate (L/min) }
 
@@ -326,7 +348,7 @@ POST /sensor/data
 | Field | Where used | Value |
 |---|---|---|
 | `device_id` (string) | `POST /hydro/devices` body, `POST /sensor/data` body, `GET /hydro/config` query | `DEVICE_CODE` from `device_id.py` |
-| `device_id` (numeric) | `POST /actuators/bulk` body, `GET /hydro/status` query param | the `id` returned from `POST /hydro/devices` |
+| `device_id` (numeric) | `POST /actuators/bulk` body, `POST /hydro/actuator/{id}/reported-state` body, `GET /hydro/status` query param | the `id` returned from `POST /hydro/devices` |
 
 **401 handling:** one automatic re-login and retry. If that fails, status
 polls and telemetry back off 30s, doubling up to 10 min.
@@ -339,6 +361,26 @@ Valid `actuator_id` / action pairs the firmware understands:
 | `sliding_door` | `on` (open), `off` (close), `toggle`, `stop` |
 
 Door `stop` is only meaningful in `HOLD` mode.
+
+### Backend compatibility notes
+
+The backend's ESP32 integration guide differs from this firmware in two
+places. Neither breaks acks, but both can affect backend features:
+
+- **Actuator types.** The guide says to keep lights as `type="light"`
+  (distinguished by `name`/`group_name`) and not to invent types like
+  `light_1`; unsupported types are ignored by automation and never match
+  recipes. This firmware registers `light_1`…`light_6`, so backend
+  automation, recipes and schedules may not apply to them (the status rows
+  stay at `sensor_off`). Manual commands and cached schedules still work
+  because the firmware matches rows by `pin`/`port`. If you want backend
+  recipes to drive the lights, register them as `type="light"` with distinct
+  `name`/`group_name` values; the firmware's pin-based matching already
+  supports this, but local `TYPE_TO_GPIO` keys would still be `light_N`.
+- **`pin` format.** The guide expects plain digits parseable as an int. The
+  door registers `pin: "32,23"` (open,close). The firmware matches by string
+  so it works, but a dashboard or backend code that does `int(pin)` on that
+  row would fail.
 
 ## Setup
 
@@ -385,6 +427,8 @@ want one.
 |---|---|---|
 | `HTTP_TIMEOUT_S` | 8 | Request timeout (lower to ~4 so a half-dead backend blocks the event loop less) |
 | `STATUS_QUERY_EXTRA` | `""` | Extra query string for the status URL, e.g. `"&compact=1"` |
+| `REPORTED_STATE_URL` | `FASTAPI_URL + "/hydro/actuator"` | Base URL for reported-state acks |
+| `MAX_ACKS_PER_TICK` | 3 | Max ack POSTs per `SEND_INTERVAL`; keeps the loop responsive |
 | `WIFI_CONNECT_TIMEOUT_S` | 15 | WiFi connect timeout |
 | `WIFI_RETRY_BACKOFF_S` | `(2, 5, 10, 20, 30)` | WiFi reconnect backoff |
 | `DEFAULT_MAX_ON_TIME_S` | 12h | Safety-sweep ceiling for relay channels |
@@ -415,15 +459,20 @@ whatever the backend says.
   `/hydro/status` poll, cached schedules drive any channel that has one.
   Backend manual overrides are ignored until it reconnects. The door is never
   automated by the scheduler.
+- **Acks**: after each status interval `control.py` compares each channel's
+  real state with what the backend last accepted and POSTs only the
+  differences. `[control] ack light_1 -> ON` is logged on success. No log
+  line means nothing changed (normal). Failed or lost acks retry on the next
+  interval. Acks are paused in `AUTO_MODE` and during 401 backoff.
 - **Local automation flag**: `config.AUTO_MODE["enabled"] = True` makes
   `control.poll_status()` return nothing, so the ESP32 stops acting on
   backend commands. There is no local rules engine in the current code, so
   enabling it just freezes backend control.
 - **Monitor what's happening**: connect over serial at 115200 baud. Every
-  login, registration, command execution, schedule change and safety-sweep
-  trip is logged with a `[module]` prefix (`[wifi]`, `[auth]`, `[device]`,
-  `[control]`, `[sched]`, `[actuators]`, `[flow_sensor]`, `[sensors]`,
-  `[oled]`).
+  login, registration, command execution, ack, schedule change and
+  safety-sweep trip is logged with a `[module]` prefix (`[wifi]`, `[auth]`,
+  `[device]`, `[control]`, `[sched]`, `[actuators]`, `[flow_sensor]`,
+  `[sensors]`, `[oled]`).
 - **Silent no-ops**: `[control] executed ...` only prints when a state
   actually changes. No log line for an unchanged channel is normal.
 - **Check status at a glance**: the OLED (if attached) refreshes every 2s
@@ -451,6 +500,10 @@ without risking hardware. Have an electrician verify the mains side.
 | `poll_status()` returns nothing even though the backend has commands queued | `Device.numeric_id` hasn't resolved yet (registration incomplete). `GET /hydro/status` is skipped until that id exists. |
 | `[control] poll_status out of memory` | Response too large. Confirm the poll is scoped (`?device_id=`); otherwise use `STATUS_QUERY_EXTRA` with a slim backend mode. |
 | `[control] unresolved status row id=… pin=…` / a light never responds while others do | The row's `pin`/`port` doesn't match any `TYPE_TO_GPIO` descriptor (row created manually on the dashboard, or the pin map drifted). Check `GET /actuators/device/{numeric_id}`. |
+| `[control] reported-state N rejected, status 400` | `device_id` in the body isn't the numeric DB id, or the actuator id belongs to another device. Check `GET /actuators/device/{id}`. |
+| `[control] reported-state N rejected, status 404` | Backend actuator id no longer exists (DB wipe or actuator deleted). Reboot so `device.py` re-resolves ids. |
+| Dashboard shows reported state stale or empty | `device.actuator_ids_by_type` is empty (ids not resolved). Look for `[device] could not resolve actuator ids`. Acks start automatically once resolved. |
+| Dashboard `reported_state_error` is set | A command failed on the board (e.g. `unsupported action`); the message is the one logged by `actuators.execute`. |
 | `[sched] mode -> OFFLINE` while the backend is up | No good status poll within `OFFLINE_AFTER_S`. See the poll errors above it. |
 | `[sched] clock not set yet` | No NTP sync since boot. Check WiFi/DNS, or fit a DS3231 RTC. |
 | `[sched] backend actuator … not on this board` | Row's `pin`/`port` doesn't match `TYPE_TO_GPIO`. |
