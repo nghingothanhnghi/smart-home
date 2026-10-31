@@ -88,6 +88,10 @@ ACTUATOR_BULK_URL = ACTUATOR_URL + "/bulk"
 STATUS_URL = FASTAPI_URL + "/hydro/status"
 # ↔ GET → ESP32 fetch commands from backend
 
+REPORTED_STATE_URL = FASTAPI_URL + "/hydro/actuator"
+# ↔ POST → ESP32 acknowledges GPIO/PWM application at
+#    /hydro/actuator/{actuator_id}/reported-state
+
 # Device config + per-actuator schedules (small payload, scoped to this device)
 CONFIG_URL = FASTAPI_URL + "/hydro/config"
 # ↔ GET ?device_id=<DEVICE_CODE> → thresholds + actuators[].schedules
