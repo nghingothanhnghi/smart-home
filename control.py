@@ -18,25 +18,14 @@ The device's "brain loop" for the hydro backend:
             (door: left alone, its own HOLD timeout/stop covers it)
         Polling doubles as the heartbeat (no separate endpoint).
 
-  - POST /hydro/actuator/{actuator_id}/reported-state
-        ACK of what the GPIO is ACTUALLY doing. Body:
-          {"device_id": <numeric device id>, "reported_state": bool,
-           "error": str|null (max 500 chars)}
-        It never changes the desired state - it only fills the backend's
-        reported_state* columns so the dashboard can show desired vs
-        actual. Sent:
-          * on boot / first successful registration (every channel),
-          * whenever a channel's real state differs from the last state
-            the backend acknowledged (commands, safety-sweep trips,
-            offline-scheduler changes, WiFi-reconnect catch-up),
-          * with "error" set when a command could not be applied.
-        Reconciliation is state-diff based, so a failed/lost ack is
-        simply retried on the next status interval. At most
-        MAX_ACKS_PER_TICK acks go out per interval so a burst can't
-        block the event loop for long.
-
   - POST /sensor/data   -> periodic sensor telemetry.
   - POST /hydro/flow-readings -> per-pump flow rate.
+  - POST /hydro/actuator/{actuator_id}/reported-state
+        -> acknowledges what the hardware ACTUALLY applied (see
+        report_pending_states()). relay.py queues one entry per
+        actuator type in config.PENDING_STATE_REPORTS whenever a
+        channel's hardware state changes (or a pin write fails);
+        entries are removed only once the backend accepts them.
 
 401 handling: one transparent re-login + retry. If that still fails the
 control loop backs off 30 s, doubling up to 10 min, so an expired or
@@ -51,8 +40,10 @@ Optional config.py names (all have defaults):
   HTTP_TIMEOUT_S      request timeout (default 8)
   STATUS_QUERY_EXTRA  extra query string appended to the status URL,
                       e.g. "&compact=1" if the backend adds a slim mode
-  REPORTED_STATE_URL  base for acks (default FASTAPI_URL + "/hydro/actuator")
-  MAX_ACKS_PER_TICK   max reported-state POSTs per status interval (default 3)
+  REPORTED_STATE_URL  base for acknowledgements
+                      (default FASTAPI_URL + "/hydro/actuator")
+  RETRY_DELAY         seconds to wait before retrying a failed
+                      acknowledgement (default 5)
 """
 
 import time
@@ -77,7 +68,12 @@ HTTP_TIMEOUT_S = getattr(config, "HTTP_TIMEOUT_S", 8)
 STATUS_QUERY_EXTRA = getattr(config, "STATUS_QUERY_EXTRA", "")
 REPORTED_STATE_URL = getattr(config, "REPORTED_STATE_URL",
                              config.FASTAPI_URL + "/hydro/actuator")
-MAX_ACKS_PER_TICK = getattr(config, "MAX_ACKS_PER_TICK", 3)
+REPORT_RETRY_S = getattr(config, "RETRY_DELAY", 5)
+
+# relay.py normally creates this; guard anyway so control.py never
+# crashes on import order.
+if not hasattr(config, "PENDING_STATE_REPORTS"):
+    config.PENDING_STATE_REPORTS = {}
 
 BACKOFF_START_S = 30
 BACKOFF_MAX_S = 600
@@ -104,9 +100,8 @@ class ControlLoop:
         self._backoff_s = 0
         self._blocked_until = None   # ticks_ms deadline while backing off
 
-        # reported-state ack bookkeeping
-        self._reported = {}          # local type -> last state the backend accepted
-        self._ack_errors = {}        # local type -> pending error text (<=500 chars)
+        self._next_report_ms = time.ticks_ms()   # earliest time to (re)try acknowledgements
+        self._warned_no_id = set()               # types already warned about (no backend id yet)
 
     # ---------------------------------------------------------
     # Auth backoff
@@ -309,102 +304,108 @@ class ControlLoop:
         return commands
 
     # ---------------------------------------------------------
-    # Ack: POST /hydro/actuator/{id}/reported-state
+    # Reported-state acknowledgements
+    # POST /hydro/actuator/{actuator_id}/reported-state
     # ---------------------------------------------------------
-    def _post_ack(self, backend_id, state, error):
+    def report_pending_states(self):
         """
-        One reported-state POST. Returns the HTTP status, or None if the
-        request never completed (network error / auth backoff).
-        """
-        if self._in_backoff():
-            return None
+        Delivers config.PENDING_STATE_REPORTS (queued by relay.py) to the
+        backend, so it can tell "commanded ON" apart from "hardware
+        really switched ON" (or failed to).
 
-        url = REPORTED_STATE_URL + "/" + str(backend_id) + "/reported-state"
-        body = ujson.dumps({
-            "device_id": self.device.numeric_id,   # DB id (int), NOT the string code
-            "reported_state": state,
-            "error": error,
-        })
-        resp = None
-        try:
-            resp = self._request("POST", url, body)
-            if resp is None:
-                return None
+        Per entry:
+          * no backend id known yet (registration incomplete) -> stays
+            pending, warned once.
+          * 2xx           -> removed.
+          * 404 / 422     -> dropped with a warning: retrying can never
+            succeed (stale actuator id after a DB wipe, or a payload the
+            backend rejects), and an immortal entry would be re-POSTed
+            forever.
+          * 401           -> _request() re-logs-in once; if that still
+            fails it starts the auth backoff and the entry stays pending.
+          * anything else / exception -> stays pending; the sweep stops
+            and waits REPORT_RETRY_S, so a dead backend costs ONE
+            blocking request per retry window, not one per entry.
 
-            status = resp.status_code
-            if status >= 300:
-                try:
-                    detail = resp.text
-                except Exception:
-                    detail = "<no body>"
-                print("[control] reported-state %s rejected, status %s: %s" %
-                      (backend_id, status, detail))
-            resp.close()
-            resp = None
-            return status
-        except Exception as e:
-            print("[control] reported-state %s failed: %s" % (backend_id, e))
-            if resp is not None:
-                try:
-                    resp.close()
-                except Exception:
-                    pass
-            return None
-
-    def sync_reported_states(self):
+        Delivery is at-least-once and latest-state-wins (the dict is keyed
+        by actuator type). Call this only while the backend is reachable
+        (ControlLoop.tick() does).
         """
-        Reconcile what the backend last acknowledged against what the
-        channels are really doing, and ack any difference (plus any
-        pending error). Safe to call every status interval:
-          * no-op when nothing changed (no HTTP at all),
-          * retried automatically if an ack fails or WiFi was down,
-          * capped at MAX_ACKS_PER_TICK requests per call.
-        The reported value is the channel's real state (door: True =
-        open/up, False = closed/down), read after any command ran.
-        """
-        if config.AUTO_MODE["enabled"]:
+        pending = config.PENDING_STATE_REPORTS
+        if not pending:
             return
-        if self.device.numeric_id is None or self._in_backoff():
+        numeric_id = self.device.numeric_id
+        if numeric_id is None or self._in_backoff():
+            return
+        if time.ticks_diff(time.ticks_ms(), self._next_report_ms) < 0:
             return
 
         ids = self.device.actuator_ids_by_type
-        if not ids:
-            return   # backend actuator ids not resolved yet; retry next interval
 
-        sent = 0
-        for actuator_type, ch in self.actuators.relays.channels.items():
-            if sent >= MAX_ACKS_PER_TICK:
-                break
-
-            backend_id = ids.get(actuator_type)
-            if backend_id is None:
+        for actuator_type in list(pending.keys()):
+            report = pending.get(actuator_type)
+            if report is None:
                 continue
 
-            state = bool(ch.is_on())
-            error = self._ack_errors.get(actuator_type)
-            if error is None and self._reported.get(actuator_type) == state:
-                continue   # backend already knows
+            actuator_id = ids.get(actuator_type)
+            if actuator_id is None:
+                if actuator_type not in self._warned_no_id:
+                    self._warned_no_id.add(actuator_type)
+                    print("[control] no backend id for '%s' yet, keeping its "
+                          "reported state pending" % actuator_type)
+                continue
+            self._warned_no_id.discard(actuator_type)
 
-            sent += 1
-            status = self._post_ack(backend_id, state, error)
-            if status is None:
-                continue   # transient - try again next interval
+            url = REPORTED_STATE_URL + "/" + str(actuator_id) + "/reported-state"
+            body = ujson.dumps({
+                "device_id": numeric_id,
+                "reported_state": report["reported_state"],
+                "error": report["error"],
+            })
 
-            if 200 <= status < 300:
-                self._reported[actuator_type] = state
-                self._ack_errors.pop(actuator_type, None)
-                print("[control] ack %s -> %s%s" %
-                      (actuator_type, "ON" if state else "OFF",
-                       " (error reported)" if error else ""))
-            elif status in (408, 429) or status >= 500:
-                continue   # server-side/transient - retry next interval
-            else:
-                # 4xx (e.g. 400 'Actuator does not belong to device',
-                # 404): retrying the identical request can't succeed and
-                # would just spam the backend every interval. Remember
-                # it as handled; a later state change tries again.
-                self._reported[actuator_type] = state
-                self._ack_errors.pop(actuator_type, None)
+            resp = None
+            try:
+                resp = self._request("POST", url, body)
+                if resp is None:
+                    break   # auth backoff started; keep everything pending
+
+                status = resp.status_code
+                detail = None
+                if status >= 300:
+                    try:
+                        detail = resp.text
+                    except Exception:
+                        detail = "<no body>"
+                resp.close()
+                resp = None
+
+                if 200 <= status < 300:
+                    # Only drop it if relay.py didn't queue a newer state meanwhile.
+                    if pending.get(actuator_type) is report:
+                        del pending[actuator_type]
+                    continue
+
+                if status in (404, 422):
+                    print("[control] reported-state for %s rejected (HTTP %s), dropping: %s"
+                          % (actuator_type, status, detail))
+                    if pending.get(actuator_type) is report:
+                        del pending[actuator_type]
+                    continue
+
+                print("[control] reported-state for %s failed, HTTP %s: %s"
+                      % (actuator_type, status, detail))
+                self._next_report_ms = time.ticks_add(time.ticks_ms(), REPORT_RETRY_S * 1000)
+                break
+
+            except Exception as e:
+                print("[control] reported-state for %s failed: %s" % (actuator_type, e))
+                if resp is not None:
+                    try:
+                        resp.close()
+                    except Exception:
+                        pass
+                self._next_report_ms = time.ticks_add(time.ticks_ms(), REPORT_RETRY_S * 1000)
+                break
 
     # ---------------------------------------------------------
     # Telemetry
@@ -485,13 +486,10 @@ class ControlLoop:
                 success, message = self.actuators.execute(command)
                 if message is not None:
                     print("[control] executed", command, "->", success, message)
-                if not success:
-                    # surfaced to the dashboard via the next reported-state ack
-                    self._ack_errors[command["actuator_id"]] = str(message)[:500]
 
-            # Ack real channel state (after commands ran). Also catches
-            # safety-sweep trips and offline-scheduler changes.
-            self.sync_reported_states()
+        # Acknowledge whatever the hardware just did (cheap no-op when
+        # nothing is queued; self-throttled after a failure).
+        self.report_pending_states()
 
         if now - self._last_sensor_push >= config.SEND_INTERVAL:
             self._last_sensor_push = now

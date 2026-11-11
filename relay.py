@@ -19,6 +19,16 @@ actual GPIO output on every change, so anything reading those dicts
 (oled_display.py, control.py's state push) never lies about what's
 physically energized.
 
+Reported-state acknowledgements: every time a channel's hardware state
+actually changes (or the pin write FAILS), the result is queued in
+config.PENDING_STATE_REPORTS[actuator_type] =
+{"reported_state": bool, "error": str|None}. control.py's
+report_pending_states() delivers them to
+POST /hydro/actuator/{actuator_id}/reported-state. The dict is keyed
+by actuator type, so rapid changes while offline coalesce - only the
+LATEST applied state per channel is reported after reconnect.
+Re-commanding the same state is a no-op and queues nothing.
+
 Safety watchdog: config.py doesn't define a max-on-time ceiling for
 this deployment, so a sane default is used unless one is added
 (config.DEFAULT_MAX_ON_TIME_S) - protects against a stuck command or
@@ -39,8 +49,21 @@ import time
 import config
 import gpio_manager
 
+# config.py may not define this yet - create it so relay.py never
+# crashes the boot on an AttributeError.
+if not hasattr(config, "PENDING_STATE_REPORTS"):
+    config.PENDING_STATE_REPORTS = {}
+
 PWM_FREQ_HZ = 1000
 DEFAULT_MAX_ON_TIME_S = getattr(config, "DEFAULT_MAX_ON_TIME_S", 12 * 60 * 60)  # 12h
+
+
+def _queue_report(actuator_type, state, error=None):
+    """Latest-wins, one slot per actuator type (coalesces while offline)."""
+    config.PENDING_STATE_REPORTS[actuator_type] = {
+        "reported_state": bool(state),
+        "error": error,
+    }
 
 
 class RelayChannel:
@@ -83,6 +106,10 @@ class RelayChannel:
             duty = 1023 - duty
         self._pin.duty(duty)
 
+    def _fail(self, what, exc):
+        """A pin write raised: queue an error report (state treated as OFF), then re-raise."""
+        _queue_report(self.actuator_type, False, "%s write failed: %s" % (what, exc))
+
     # ---- public API ----
     def set(self, energize):
         """
@@ -94,7 +121,11 @@ class RelayChannel:
         """
         if energize == self._on:
             return
-        self._write_digital(energize)
+        try:
+            self._write_digital(energize)
+        except Exception as e:
+            self._fail("PWM" if self.hardware == "mosfet" else "GPIO", e)
+            raise
         self._on = energize
         self._speed = 100 if energize else 0
         self._on_since = time.time() if energize else None
@@ -105,10 +136,14 @@ class RelayChannel:
         speed_pct = max(0, min(100, speed_pct))
         if speed_pct == self._speed:
             return  # same reason as set() above - avoid resetting _on_since for no reason
-        if self.hardware == "mosfet":
-            self._write_pwm_speed(speed_pct)
-        else:
-            self._write_digital(speed_pct > 0)
+        try:
+            if self.hardware == "mosfet":
+                self._write_pwm_speed(speed_pct)
+            else:
+                self._write_digital(speed_pct > 0)
+        except Exception as e:
+            self._fail("PWM" if self.hardware == "mosfet" else "GPIO", e)
+            raise
         self._speed = speed_pct
         self._on = speed_pct > 0
         self._on_since = time.time() if self._on else None
@@ -141,6 +176,9 @@ class RelayChannel:
         config.ACTUATOR_STATES[self.pin_key] = 1 if self._on else 0
         if self.pin_key in config.PUMP_SPEED:
             config.PUMP_SPEED[self.pin_key] = self._speed
+        # Hardware really changed -> queue the acknowledgement
+        # (mosfet: reported_state is speed > 0, same as self._on).
+        _queue_report(self.actuator_type, self._on)
 
 
 class DoorChannel:
@@ -149,6 +187,10 @@ class DoorChannel:
     the same on()/off()/toggle()/is_on() interface as RelayChannel so
     actuators.py and control.py don't need to know the difference.
     on() = open, off() = close.
+
+    Reported state = the logical commanded position (True = open).
+    stop() and the end of a PULSE-mode pulse do NOT queue a report:
+    they release the pins without asserting a position.
     """
 
     def __init__(self, open_pin, close_pin, mode="PULSE",
@@ -167,7 +209,7 @@ class DoorChannel:
 
         self._on = False            # False = closed, True = open (last commanded)
         self._running_since = None  # HOLD mode only
-        self._pulse_release_at = None # PULSE mode only: monotonic deadline to auto-release        
+        self._pulse_release_at = None # PULSE mode only: monotonic deadline to auto-release
         self.set(False)             # start safe: closed, both pins de-energized
 
     def _write(self, pin, energize):
@@ -178,11 +220,23 @@ class DoorChannel:
         if (want_open == self._on and self._running_since is None
                 and self._pulse_release_at is None):
             return  # no-op, same as RelayChannel.set()
- 
+
         target, other = (self._open_pin, self._close_pin) if want_open else (self._close_pin, self._open_pin)
-        self._write(other, False)   # interlock: always drop the opposite side first
-        self._write(target, True)
- 
+        try:
+            self._write(other, False)   # interlock: always drop the opposite side first
+            self._write(target, True)
+        except Exception as e:
+            # Best effort: never leave either side energized after a failed write.
+            try:
+                self._write(self._open_pin, False)
+                self._write(self._close_pin, False)
+            except Exception:
+                pass
+            self._running_since = None
+            self._pulse_release_at = None
+            _queue_report(self.actuator_type, False, "GPIO write failed: %s" % e)
+            raise
+
         if self.mode == "PULSE":
             # NON-BLOCKING: previously this did time.sleep(self.pulse_s)
             # here, which stalled the entire main_loop (no command
@@ -196,9 +250,10 @@ class DoorChannel:
         else:  # HOLD
             self._running_since = time.time()
             self._pulse_release_at = None
- 
+
         self._on = want_open
         config.ACTUATOR_STATES["door"] = 1 if self._on else 0
+        _queue_report(self.actuator_type, self._on)
 
     def stop(self):
         """HOLD-mode safety release - drops both pins without asserting a position."""
@@ -206,12 +261,12 @@ class DoorChannel:
         self._write(self._close_pin, False)
         self._running_since = None
         self._pulse_release_at = None
-        
+
     # ---- PULSE-mode servicing (called every main_loop tick) ----
     def pulse_due(self):
         """True once an in-flight PULSE-mode pulse has reached its release deadline."""
         return self._pulse_release_at is not None and time.time() >= self._pulse_release_at
- 
+
     def release_pulse(self):
         """
         De-energize the currently-pulsing pin. Distinct from stop():
@@ -224,7 +279,7 @@ class DoorChannel:
             return
         self._write(self._open_pin, False)
         self._write(self._close_pin, False)
-        self._pulse_release_at = None        
+        self._pulse_release_at = None
 
     def on(self):
         self.set(True)
@@ -284,6 +339,8 @@ class RelayManager:
         Call periodically from the main loop. Force-off any channel
         that has exceeded its allowed on-time. Returns a list of
         actuator types that were force-stopped, for logging/telemetry.
+        (A relay force-off queues a reported-state OFF, so the backend
+        learns the hardware no longer matches what it commanded.)
         """
         tripped = []
         for actuator_type, ch in self.channels.items():
@@ -294,7 +351,7 @@ class RelayManager:
                     ch.off()
                 tripped.append(actuator_type)
         return tripped
-    
+
     # ---- non-blocking pulse servicing (PULSE-mode doors) ----
     def service_pulses(self):
         """
@@ -307,7 +364,7 @@ class RelayManager:
         """
         for ch in self.channels.values():
             if hasattr(ch, "pulse_due") and ch.pulse_due():
-                ch.release_pulse()    
+                ch.release_pulse()
 
     def state_snapshot(self):
         return {t: ch.is_on() for t, ch in self.channels.items()}
